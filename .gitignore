@@ -1,0 +1,33 @@
+# ROS 2 / colcon
+build/
+install/
+log/
+.ros/
+
+# ROS bags / runtime data
+*.bag
+*.bag.active
+*.db3
+*.mcap
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# C/C++
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# PlatformIO / embedded
+.pio/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
