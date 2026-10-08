@@ -40,12 +40,12 @@ def main(args=None):
             self.create_subscription(Twist,'/autonomy/cmd_vel',self.drive,10)
             self.create_subscription(String,'/autonomy/tool_command',self.tool_cmd,10)
             self.create_subscription(String,'/autonomy/state',self.state,10)
-            broadcaster = StaticTransformBroadcaster(self)
+            self.broadcaster = StaticTransformBroadcaster(self)
             tf = TransformStamped()
             tf.header.stamp = self.get_clock().now().to_msg()
             tf.header.frame_id,tf.child_frame_id = 'base_link','sim_lidar'
             tf.transform.rotation.w = 1.
-            broadcaster.sendTransform(tf)
+            self.broadcaster.sendTransform(tf)
             self.create_timer(.05,self.step)
 
         def clock(self):
