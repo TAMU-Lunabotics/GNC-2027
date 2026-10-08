@@ -37,9 +37,10 @@ jobs:
       - name: Install package dependencies
         shell: bash
         run: |
-          source /opt/ros/humble/setup.bash
-          rosdep update
-          rosdep install --from-paths src/lunabotics_autonomy --ignore-src -r -y
+          apt-get update
+          apt-get install -y python3-opencv python3-numpy \
+            ros-humble-ament-python ros-humble-sensor-msgs-py \
+            ros-humble-tf2-ros ros-humble-std-srvs
       - name: Build ROS 2 package
         shell: bash
         run: |
