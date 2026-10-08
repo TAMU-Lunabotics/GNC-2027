@@ -17,6 +17,7 @@ def main(args=None):
             super().__init__('lunabotics_graph_acceptance')
             self.last_pose = self.last_grid = self.last_estop = -1e9
             self.state = 'disarmed'
+            self.state_text = 'disarmed'
             self.cycles = 0
             self.path_seen = False
             self.free_seen = False
@@ -46,6 +47,7 @@ def main(args=None):
             if phase == 'verify' and self.state != 'verify':
                 self.cycles += 1
             self.state = phase
+            self.state_text = msg.data
 
         def safety(self,msg):
             self.estop,self.last_estop = bool(msg.data),self.clock()
@@ -74,7 +76,8 @@ def main(args=None):
         while time.monotonic()-start < 750:
             rclpy.spin_once(node,timeout_sec=.1)
             if node.estop or node.state == 'fault':
-                raise RuntimeError('graph safety/mission fault: '+node.state)
+                raise RuntimeError(f'graph fault: {node.state_text}; estop={node.estop}; '
+                    f'cycles={node.cycles}; berm_l={node.volume:.2f}')
             if node.state == 'complete':
                 if node.cycles < 2 or node.volume < 25 or not node.path_seen:
                     raise RuntimeError('incomplete cycles, berm, or path telemetry')
