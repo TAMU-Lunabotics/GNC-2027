@@ -173,21 +173,47 @@ def exploratory_route(start: Pose, goal, points, cfg, known_free):
         return [],None
     pad = max(cfg.robot_radius+cfg.clearance,cfg.stop_distance+.10)
     current = distance((start.x,start.y),goal)
-    candidates = []
-    for i,j in known_free:
-        p = ((i+.5)*cfg.cell,(j+.5)*cfg.cell)
-        if (not pad <= p[0] <= cfg.width-pad or
-            not pad <= p[1] <= cfg.height-pad or
-            distance(p,goal) >= current-.5 or
-            distance(p,(start.x,start.y)) < .5 or
-            not observed_footprint(p,cfg,known_free,pad)):
-            continue
-        candidates.append(p)
-    candidates.sort(key=lambda p:(distance(p,goal),distance(p,(start.x,start.y))))
-    for candidate in candidates[:24]:
-        route = plan(start,candidate,points,cfg,known_free)
+    obstacles = [p for p in points if all(math.isfinite(v) for v in p)]
+    def xy(cell):
+        return ((cell[0]+.5)*cfg.cell,(cell[1]+.5)*cfg.cell)
+    allowed = set()
+    for cell in known_free:
+        p = xy(cell)
+        if (pad <= p[0] <= cfg.width-pad and
+            pad <= p[1] <= cfg.height-pad and
+            observed_footprint(p,cfg,known_free,pad) and
+            all(distance(p,obstacle) >= pad for obstacle in obstacles)):
+            allowed.add(cell)
+    source = (int(start.x/cfg.cell),int(start.y/cfg.cell))
+    if source not in allowed:
+        return [],None
+    # Search the connected component first. Sorting all observed cells by
+    # goal distance can choose unreachable islands behind unseen shadows.
+    queue = [source]
+    seen = {source}
+    best,score = None,float('inf')
+    for cell in queue:
+        p = xy(cell)
+        progress = current-distance(p,goal)
+        travel = distance(p,(start.x,start.y))
+        if progress >= .5 and travel >= .5:
+            candidate_score = distance(p,goal)+.02*travel
+            if candidate_score < score:
+                best,score = p,candidate_score
+        for di,dj in ((1,0),(-1,0),(0,1),(0,-1),
+                      (1,1),(1,-1),(-1,1),(-1,-1)):
+            other = (cell[0]+di,cell[1]+dj)
+            if other not in allowed or other in seen:
+                continue
+            if di and dj and ((cell[0]+di,cell[1]) not in allowed or
+                              (cell[0],cell[1]+dj) not in allowed):
+                continue
+            seen.add(other)
+            queue.append(other)
+    if best is not None:
+        route = plan(start,best,points,cfg,known_free)
         if route:
-            return route,candidate
+            return route,best
     return [],None
 
 
