@@ -24,3 +24,35 @@ jobs:
         working-directory: src/lunabotics_autonomy
       - run: python -m pip wheel --no-deps --no-build-isolation .
         working-directory: src/lunabotics_autonomy
+
+  ros-graph:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 18
+    container:
+      image: ghcr.io/ros-tooling/setup-ros-docker/ubuntu-jammy-ros-humble-ros-base
+    env:
+      ROS_DOMAIN_ID: '213'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install package dependencies
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          rosdep update
+          rosdep install --from-paths src/lunabotics_autonomy --ignore-src -r -y
+      - name: Build ROS 2 package
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --base-paths src/lunabotics_autonomy --packages-select lunabotics_autonomy
+      - name: Complete synthetic ROS graph mission
+        shell: bash
+        run: |
+          set -euo pipefail
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          ros2 launch lunabotics_autonomy graph_sitl.launch.py > /tmp/lunabotics-graph.log 2>&1 &
+          graph_pid=$!
+          trap 'kill "$graph_pid" 2>/dev/null || true; tail -100 /tmp/lunabotics-graph.log' EXIT
+          sleep 5
+          timeout 750s ros2 run lunabotics_autonomy graph_acceptance
