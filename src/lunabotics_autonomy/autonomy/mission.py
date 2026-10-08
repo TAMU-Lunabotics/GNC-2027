@@ -1,6 +1,7 @@
 """Deterministic, latched-fault state machine. Outputs are always zero by default."""
 import math
-from .navigation import distance, follow, plan, route_clear, too_close, wrap
+from .navigation import (distance, exploratory_route, follow, plan,
+                         route_clear, too_close, wrap)
 from .types import Config, Observation, Output, Phase
 
 
@@ -11,6 +12,7 @@ class Mission:
         self.phase = Phase.IDLE
         self.fault = ''
         self.path = []
+        self.exploration_goal = None
         self.last_plan_time = -1e9
         self.resume_phase = None
         self.pause_start = None
@@ -57,9 +59,10 @@ class Mission:
         self.phase, self.phase_time = phase, obs.now
         self.last_progress_time, self.last_goal_distance = obs.now, float('inf')
         self.path = []
+        self.exploration_goal = None
         if phase in (Phase.TO_DIG, Phase.TO_DUMP):
             dest = self.cfg.dig if phase == Phase.TO_DIG else self.cfg.dump
-            self.path = plan(obs.pose, dest, obs.obstacles, self.cfg, obs.known_free)
+            self._route(obs,dest)
             if not self.path:
                 return self._pause('no_safe_path', obs.now)
             self.last_plan_time = obs.now
@@ -75,16 +78,28 @@ class Mission:
             self.last_material_progress_time = obs.now
         return Output(phase)
 
+    def _route(self, obs, dest):
+        direct = plan(obs.pose,dest,obs.obstacles,self.cfg,obs.known_free)
+        if direct:
+            self.path,self.exploration_goal = direct,None
+        else:
+            self.path,self.exploration_goal = exploratory_route(obs.pose,dest,
+                obs.obstacles,self.cfg,obs.known_free)
+        self.last_plan_time = obs.now
+
     def _health(self, o):
         c, t = self.cfg, o.now
         if o.estop:
             return 'estop'
         if t - o.estop_time > c.estop_timeout or o.estop_time > t + 0.1:
             return 'stale_estop'
+        if self.phase == Phase.IDLE and (
+                t-o.camera_time > c.camera_timeout or o.camera_time > t+.1):
+            return 'stale_initial_tag'
         if o.pose is None or not all(math.isfinite(v) for v in (o.pose.x, o.pose.y, o.pose.yaw)):
             return 'invalid_pose'
         if any(t - stamp > limit or stamp > t + 0.1 for stamp, limit in (
-            (o.pose_time, c.pose_timeout), (o.camera_time, c.camera_timeout),
+            (o.pose_time, c.pose_timeout),
             (o.lidar_time, c.lidar_timeout), (o.encoder_time, c.encoder_timeout),
             (o.mass_time, c.mass_timeout), (o.actuator_time, c.actuator_timeout),
             (o.battery_time, c.battery_timeout))):
@@ -126,10 +141,9 @@ class Mission:
             target = self.resume_phase
             if target in (Phase.TO_DIG, Phase.TO_DUMP):
                 goal = self.cfg.dig if target == Phase.TO_DIG else self.cfg.dump
-                self.path = plan(o.pose, goal, o.obstacles, self.cfg, o.known_free)
+                self._route(o,goal)
                 if not self.path:
                     return Output(Phase.PAUSED, fault='no_safe_path')
-                self.last_plan_time = o.now
             duration = o.now-self.pause_start
             self.phase = target
             self.last_progress_time += duration
@@ -149,6 +163,13 @@ class Mission:
                 return self._fault('tool_not_raised_for_travel')
             dest = self.cfg.dig if self.phase == Phase.TO_DIG else self.cfg.dump
             d = distance((o.pose.x, o.pose.y), dest)
+            if (self.exploration_goal is not None and
+                distance((o.pose.x,o.pose.y),self.exploration_goal)
+                    <= self.cfg.goal_tolerance):
+                self._route(o,dest)
+                if not self.path:
+                    return self._pause('no_safe_path',o.now)
+                return Output(self.phase)
             if d <= self.cfg.goal_tolerance:
                 target_yaw = (self.cfg.dig_yaw if self.phase == Phase.TO_DIG
                               else self.cfg.dump_yaw)
@@ -165,8 +186,7 @@ class Mission:
                 return self._fault('drive_stalled')
             if (o.now-self.last_plan_time >= self.cfg.replan_interval or
                 not route_clear(o.pose, self.path, o.obstacles, self.cfg, o.known_free)):
-                self.path = plan(o.pose, dest, o.obstacles, self.cfg, o.known_free)
-                self.last_plan_time = o.now
+                self._route(o,dest)
             if not self.path:
                 return self._pause('no_safe_path', o.now)
             linear, angular = follow(o.pose, self.path, self.cfg, o.obstacles,

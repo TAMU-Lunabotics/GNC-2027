@@ -50,11 +50,30 @@ class NavigationTests(unittest.TestCase):
     def test_unknown_space_and_shortcuts_are_blocked(self):
         start = Pose(1.1,2.2,0)
         self.assertEqual(plan(start,SIM_CONFIG.dig,[],SIM_CONFIG,set()),[])
-        strip = {(i,j) for i in range(10,70) for j in range(15,30)}
+        strip = {(i,j) for i in range(1,78) for j in range(11,34)}
         self.assertTrue(plan(start,SIM_CONFIG.dig,[],SIM_CONFIG,strip))
         gap = {cell for cell in strip if cell[0] != 40}
         self.assertEqual(plan(start,SIM_CONFIG.dig,[],SIM_CONFIG,gap),[])
         self.assertFalse(segment_clear((1.1,2.2),(6.9,2.2),[],SIM_CONFIG,gap))
+
+    def test_centerline_only_is_not_enough_for_robot_footprint(self):
+        narrow = {(i,j) for i in range(0,79) for j in range(20,25)}
+        self.assertEqual(plan(Pose(1.1,2.2,0),SIM_CONFIG.dig,[],
+                              SIM_CONFIG,narrow),[])
+
+    def test_unknown_dig_goal_uses_observed_frontier(self):
+        known = {(i,j) for i in range(2,42) for j in range(1,43)}
+        m = Mission(SIM_CONFIG)
+        o = healthy(known_free=known)
+        self.assertEqual(m.start(o).phase,Phase.TO_DIG)
+        self.assertIsNotNone(m.exploration_goal)
+        self.assertLess(m.exploration_goal[0],SIM_CONFIG.dig[0])
+        self.assertTrue(m.path)
+        expanded = {(i,j) for i in range(0,79) for j in range(0,44)}
+        o = healthy(1,known_free=expanded)
+        m.tick(o)
+        self.assertIsNone(m.exploration_goal)
+        self.assertEqual(m.path[-1],SIM_CONFIG.dig)
 
 
 class MissionTests(unittest.TestCase):
@@ -81,8 +100,16 @@ class MissionTests(unittest.TestCase):
                      'mass_time', 'actuator_time', 'battery_time', 'estop_time'):
             with self.subTest(name=name):
                 m = Mission(SIM_CONFIG)
-                expected = 'stale_estop' if name == 'estop_time' else 'stale_input'
+                expected = ('stale_estop' if name == 'estop_time' else
+                            'stale_initial_tag' if name == 'camera_time' else 'stale_input')
                 self.assertEqual(m.start(healthy(100, **{name: 0})).fault, expected)
+
+    def test_tag_can_leave_view_after_initial_localization(self):
+        m = Mission(SIM_CONFIG)
+        m.start(healthy())
+        out = m.tick(healthy(3,camera_time=0))
+        self.assertEqual(out.phase,Phase.TO_DIG)
+        self.assertEqual(out.fault,'')
 
     def test_bad_sensors(self):
         examples = {'pose_sigma': 3, 'mass_kg': float('nan'),

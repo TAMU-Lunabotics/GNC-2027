@@ -6,9 +6,9 @@
 
 | Input/output | ROS type | Frame and units | Rate / stop condition |
 | --- | --- | --- | --- |
-| `/odometry/filtered` | `nav_msgs/Odometry` | `map` → `base_link`; m, rad; finite x/y/yaw variances | ≥2 Hz; stop after 0.5 s or uncertain pose |
+| `/odometry/filtered` | `nav_msgs/Odometry` | `map` pose of `base_link`; m, rad; finite x/y/yaw variances | ≥2 Hz; stop after 0.5 s or uncertain pose; GNC localization owns `map → odom → base_link` |
 | `/unilidar/cloud` | `sensor_msgs/PointCloud2` | TF to `base_link` at message stamp; m | ≥2 Hz; stop after 0.5 s; unknown blocked |
-| `/camera/pose` | `geometry_msgs/PoseWithCovarianceStamped` | `map`; m/rad, surveyed fiducials | timeout 60 s; tag pose is not fused into odometry here |
+| `/camera/pose` | `geometry_msgs/PoseWithCovarianceStamped` | `map`; m/rad, surveyed fiducials | fresh within 2 s for start; gated tag corrects GNC wheel odometry; navigation then uses covariance, including when tags leave view |
 | `/<camera_name>/color/*` and `depth/*` | `sensor_msgs/Image`, `CameraInfo` | Orbbec-style optical frame; depth 16UC1 mm or 32FC1 m | reject malformed or dimension-mismatched data; optional depth stop after 0.5 s |
 | `/drive/encoders` | `std_msgs/Int32MultiArray` | ≥2 measured counts | ≥2 Hz; stop after 0.5 s |
 | `/hopper/mass_kg`, `/battery/voltage` | `std_msgs/Float32` | kg, V | stop after 1 s / 2 s or invalid limit |
@@ -20,5 +20,7 @@
 | `/autonomy/start`, `/autonomy/reset` | `std_srvs/Trigger` | explicit operator transition | latched fault requires manual reset |
 
 Map extents are used as a geofence, not a prior wall/column map. ROS plans only through cells observed free along LiDAR beams; unseen space is blocked. The idealized 2-D simulator assumes a surveyed free arena and cannot validate slopes, holes, dust, glare, occlusion, serial timing, motor signs, or Jetson load.
+
+The GNC localization node needs measured wheel radius, track, encoder counts/revolution, signed CDH counts and a surveyed marker pose before it publishes a global pose. It is the sole TF authority for `map → odom → base_link`. A separate KISS-ICP or EKF broadcaster must not publish these transforms at the same time. Its wheel-slip uncertainty model requires calibration on real terrain; tag corrections above the outlier gate are rejected. The LiDAR ground band must be calibrated from mounted cloud data. The isolated `graph_sitl.launch.py` generates synthetic sensors in ROS domain 213 for a software integration check only.
 
 **Before use:** GNC and CDH must jointly approve topics and sensor identities; measure footprint, wheel and tool geometry, limit/RPM feedback, hopper capacity, regolith bulk density, tag positions, camera/LiDAR extrinsics, ROI and battery limits; check one TF authority and real bag replay; build on ROS 2 Humble; test rover-level simulation and supervised physical runs. The launch is disarmed by default. The current competition requires at least two hands-free full cycles, real-time obstacle/map/path display, and the berm-volume multiplier target of 25,000 cm³. No trial count here supports a 95% success estimate.

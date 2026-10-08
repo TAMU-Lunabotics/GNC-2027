@@ -15,8 +15,11 @@ class OccupancyTests(unittest.TestCase):
         m = ObstacleMemory(SIM_CONFIG)
         m.update((1,1),[(2,1)],1)
         m.update((1,1),[(3,1)],2)
-        self.assertEqual(len(m.points(2)),1)
-        self.assertAlmostEqual(m.points(2)[0][0],3.05)
+        self.assertEqual(len(m.points(2)),2)  # one clear scan is not enough
+        m.update((1,1),[(3,1)],2.1)
+        m.update((1,1),[(3,1)],2.2)
+        self.assertEqual(len(m.points(2.2)),1)
+        self.assertAlmostEqual(m.points(2.2)[0][0],3.05)
 
     def test_one_frame_keeps_near_and_far_hits(self):
         m = ObstacleMemory(SIM_CONFIG)

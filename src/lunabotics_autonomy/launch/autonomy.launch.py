@@ -18,6 +18,9 @@ def generate_launch_description():
         'dump_x':'1.1','dump_y':'2.2','dump_yaw':'3.141592653589793',
         'require_depth':'false',
         'camera_name':'camera',
+        'wheel_radius_m':'0.0','wheel_track_m':'0.0',
+        'ticks_per_revolution':'0.0','max_wheel_speed_mps':'0.0',
+        'require_imu':'false','imu_topic':'/imu/data',
         'marker_size_m':'0.0','tag_map_json':'{}',
         'base_camera_transform_json':'[]',
         'roi_x_min':'0.0','roi_y_min':'0.0',
@@ -32,7 +35,11 @@ def generate_launch_description():
                    'camera_name')
     berm_keys = ('roi_x_min','roi_y_min','roi_x_max','roi_y_max','camera_name')
     strings = {'tag_map_json','base_camera_transform_json','camera_name'}
-    booleans = {'armed','geometry_confirmed','require_depth'}
+    strings.add('imu_topic')
+    booleans = {'armed','geometry_confirmed','require_depth','require_imu'}
+    localization_keys = ('wheel_radius_m','wheel_track_m',
+        'ticks_per_revolution','max_wheel_speed_mps','arena_width',
+        'arena_height','require_imu','imu_topic')
 
     def params(keys):
         return {k:ParameterValue(L(k),value_type=(str if k in strings else
@@ -42,6 +49,9 @@ def generate_launch_description():
         *[DeclareLaunchArgument(k,default_value=v) for k,v in defaults.items()],
         Node(package='lunabotics_autonomy',executable='mission_node',
              parameters=[params(mission_keys),{'use_sim_time':ParameterValue(
+                 L('use_sim_time'),value_type=bool)}],output='screen'),
+        Node(package='lunabotics_autonomy',executable='localization_node',
+             parameters=[params(localization_keys),{'use_sim_time':ParameterValue(
                  L('use_sim_time'),value_type=bool)}],output='screen'),
         Node(package='lunabotics_autonomy',executable='fiducial_node',
              parameters=[params(camera_keys),{'use_sim_time':ParameterValue(

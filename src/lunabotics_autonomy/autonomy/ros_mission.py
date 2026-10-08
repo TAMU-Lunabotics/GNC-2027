@@ -4,6 +4,7 @@ from collections import deque
 from .mission import Mission
 from .occupancy import ObstacleMemory
 from .orbbec import camera_topics
+from .lidar import scan_beams
 from .types import Config, Observation, Pose
 
 
@@ -57,6 +58,7 @@ def main(args=None):
             self.declare_parameter('lidar_min_z', -0.15)
             self.declare_parameter('lidar_max_z', 0.65)
             self.declare_parameter('lidar_max_range', 8.0)
+            self.declare_parameter('lidar_ground_margin', 0.25)
             self.declare_parameter('require_depth', False)
             self.declare_parameter('camera_name', 'camera')
             p = lambda name: self.get_parameter(name).value
@@ -64,7 +66,9 @@ def main(args=None):
             self.lidar_min_z = float(p('lidar_min_z'))
             self.lidar_max_z = float(p('lidar_max_z'))
             self.lidar_max_range = float(p('lidar_max_range'))
+            self.lidar_ground_margin = float(p('lidar_ground_margin'))
             self.last_cloud_attempt = -1e9
+            self.last_cloud_stamp = -1e9
             self.last_depth_attempt = -1e9
             self.last_visualization = -1e9
             self.lidar_points = []
@@ -141,14 +145,26 @@ def main(args=None):
             return pose if abs(time-stamp) <= .1 else None
 
         def camera(self, msg):
-            if msg.header.frame_id == 'map':
-                self.obs.camera_time = _stamp(msg.header.stamp)
+            stamp = _stamp(msg.header.stamp)
+            pose = self.pose_at(stamp)
+            p,q,cov = msg.pose.pose.position,msg.pose.pose.orientation,msg.pose.covariance
+            yaw = yaw_from_quaternion(q)
+            if (msg.header.frame_id == 'map' and pose is not None and
+                all(math.isfinite(v) for v in (p.x,p.y,yaw,cov[0],cov[7],cov[35])) and
+                0 < max(cov[0],cov[7]) <= .09 and 0 < cov[35] <= .09 and
+                math.hypot(p.x-pose.x,p.y-pose.y) <= .5 and
+                abs((yaw-pose.yaw+math.pi)%(2*math.pi)-math.pi) <= .4 and
+                abs(self.clock()-stamp) <= .2 and stamp > self.obs.camera_time):
+                self.obs.camera_time = stamp
 
         def cloud(self, msg):
             if self.clock() - self.last_cloud_attempt < 0.15:
                 return
             self.last_cloud_attempt = self.clock()
             try:
+                stamp = _stamp(msg.header.stamp)
+                if stamp <= self.last_cloud_stamp or abs(self.clock()-stamp) > 0.5:
+                    return
                 transform = self.tf.lookup_transform('base_link', msg.header.frame_id,
                        Time.from_msg(msg.header.stamp), timeout=Duration(seconds=0.02))
                 q, offset = transform.transform.rotation, transform.transform.translation
@@ -158,29 +174,30 @@ def main(args=None):
                 xx, yy, zz, ww = q.x, q.y, q.z, q.w
                 n = math.sqrt(xx*xx+yy*yy+zz*zz+ww*ww)
                 xx, yy, zz, ww = xx/n, yy/n, zz/n, ww/n
-                pose = self.pose_at(_stamp(msg.header.stamp))
-                if not math.isfinite(yaw) or pose is None:
+                pose = self.pose_at(stamp)
+                if not math.isfinite(yaw) or pose is None or not all(
+                    math.isfinite(v) for v in (offset.x,offset.y,offset.z)):
                     return
                 c, s = math.cos(pose.yaw), math.sin(pose.yaw)
-                points = []
-                count = 0
-                for x, y, z in point_cloud2.read_points(msg, field_names=('x','y','z'), skip_nans=True):
-                    count += 1
-                    # q * vector * conjugate(q), expanded without dependencies.
-                    tx, ty, tz = 2*(yy*z-zz*y), 2*(zz*x-xx*z), 2*(xx*y-yy*x)
-                    bx = x + ww*tx + (yy*tz-zz*ty) + offset.x
-                    by = y + ww*ty + (zz*tx-xx*tz) + offset.y
-                    bz = z + ww*tz + (xx*ty-yy*tx) + offset.z
-                    if (self.lidar_min_z <= bz <= self.lidar_max_z and
-                        0.08 < math.hypot(bx, by) <= self.lidar_max_range):
-                        points.append((pose.x + c*bx - s*by, pose.y + s*bx + c*by))
-                if count < 10:
+                def base_returns():
+                    for x,y,z in point_cloud2.read_points(msg,
+                            field_names=('x','y','z'),skip_nans=True):
+                        tx,ty,tz = 2*(yy*z-zz*y),2*(zz*x-xx*z),2*(xx*y-yy*x)
+                        yield (x+ww*tx+(yy*tz-zz*ty)+offset.x,
+                               y+ww*ty+(zz*tx-xx*tz)+offset.y,
+                               z+ww*tz+(xx*ty-yy*tx)+offset.z)
+                hits, clears, count = scan_beams(base_returns(),self.lidar_min_z,
+                    self.lidar_max_z,self.lidar_max_range,self.lidar_ground_margin)
+                if count < 10 or not (hits or clears):
                     return
-                sampled = points[::max(1, len(points)//1500)]
-                self.obstacle_memory.update((pose.x, pose.y), sampled,
-                                            _stamp(msg.header.stamp))
+                def in_map(points):
+                    return [(pose.x+c*x-s*y,pose.y+s*x+c*y) for x,y in points]
+                sensor_origin = (pose.x+c*offset.x-s*offset.y,
+                                 pose.y+s*offset.x+c*offset.y)
+                self.obstacle_memory.update(sensor_origin,in_map(hits),stamp,
+                                            clear_endpoints=in_map(clears))
                 self.lidar_points = self.obstacle_memory.points(self.clock())
-                self.obs.lidar_time = _stamp(msg.header.stamp)
+                self.obs.lidar_time = self.last_cloud_stamp = stamp
             except (Exception,) as exc:
                 self.get_logger().warn(f'LiDAR/TF rejection: {exc}', throttle_duration_sec=3.0)
 

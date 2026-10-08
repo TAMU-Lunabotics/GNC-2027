@@ -81,7 +81,7 @@ class Config:
     min_battery_v: float = 20.0  # illustrative; set for actual battery chemistry
     max_pose_sigma: float = 0.35
     pose_timeout: float = 0.5
-    camera_timeout: float = 60.0
+    camera_timeout: float = 2.0  # initial surveyed localization, then covariance governs
     lidar_timeout: float = 0.5
     depth_timeout: float = 0.5
     require_depth: bool = False

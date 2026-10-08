@@ -1,6 +1,7 @@
 """Cost-aware A* with inflation, collision-checked shortcutting, and regulated tracking."""
 import heapq
 import math
+from functools import lru_cache
 from .types import Config, Pose
 
 
@@ -20,6 +21,26 @@ def point_segment_distance(p, a, b):
     return distance(p, (a[0]+u*dx, a[1]+u*dy))
 
 
+@lru_cache(maxsize=16)
+def _footprint_offsets(pad, cell):
+    # Cover every cell touching the circular swept footprint, including a
+    # half-cell discretization allowance at its edge.
+    radius = math.ceil((pad+cell/math.sqrt(2))/cell)
+    return tuple((di,dj) for di in range(-radius,radius+1)
+        for dj in range(-radius,radius+1)
+        if math.hypot(di*cell,dj*cell) <= pad+cell/math.sqrt(2))
+
+
+def observed_footprint(p, cfg, known_free, pad=None):
+    if known_free is None:
+        return True
+    pad = pad if pad is not None else max(cfg.robot_radius+cfg.clearance,
+                                       cfg.stop_distance+.10)
+    ci,cj = int(p[0]/cfg.cell),int(p[1]/cfg.cell)
+    return all((ci+di,cj+dj) in known_free
+               for di,dj in _footprint_offsets(pad,cfg.cell))
+
+
 def segment_clear(a, b, points, cfg, known_free=None):
     pad = max(cfg.robot_radius + cfg.clearance, cfg.stop_distance + 0.10)
     if not all(pad <= x <= bound-pad for x, bound in
@@ -31,7 +52,7 @@ def segment_clear(a, b, points, cfg, known_free=None):
         for index in range(1,steps+1):
             x = a[0]+(b[0]-a[0])*index/steps
             y = a[1]+(b[1]-a[1])*index/steps
-            if (int(x/cfg.cell),int(y/cfg.cell)) not in known_free:
+            if not observed_footprint((x,y),cfg,known_free,pad):
                 return False
     return all(point_segment_distance(p, a, b) >= pad for p in points
                if all(math.isfinite(v) for v in p))
@@ -89,6 +110,9 @@ def plan(start: Pose, goal: tuple[float, float], points, cfg: Config, known_free
                 blocked.add((i, j))
             if known_free is not None and (i,j) not in known_free:
                 blocked.add((i,j))
+            elif known_free is not None and not observed_footprint((x,y),cfg,
+                    known_free,clearance):
+                blocked.add((i,j))
     radius = math.ceil((clearance+0.5)/cfg.cell)
     for ox, oy in obstacles:
         ci, cj = cell((ox, oy))
@@ -137,6 +161,34 @@ def plan(start: Pose, goal: tuple[float, float], points, cfg: Config, known_free
                     g[other],parent[other] = trial,node
                     heapq.heappush(todo,(trial+distance(other,target),trial,other))
     return []
+
+
+def exploratory_route(start: Pose, goal, points, cfg, known_free):
+    """Move only within observed free space to acquire a view of an unseen goal.
+
+    The ordinary goal planner gets first priority. Exploration cannot traverse
+    unknown space or continue if no safe waypoint makes meaningful progress.
+    """
+    if known_free is None:
+        return [],None
+    pad = max(cfg.robot_radius+cfg.clearance,cfg.stop_distance+.10)
+    current = distance((start.x,start.y),goal)
+    candidates = []
+    for i,j in known_free:
+        p = ((i+.5)*cfg.cell,(j+.5)*cfg.cell)
+        if (not pad <= p[0] <= cfg.width-pad or
+            not pad <= p[1] <= cfg.height-pad or
+            distance(p,goal) >= current-.5 or
+            distance(p,(start.x,start.y)) < .5 or
+            not observed_footprint(p,cfg,known_free,pad)):
+            continue
+        candidates.append(p)
+    candidates.sort(key=lambda p:(distance(p,goal),distance(p,(start.x,start.y))))
+    for candidate in candidates[:24]:
+        route = plan(start,candidate,points,cfg,known_free)
+        if route:
+            return route,candidate
+    return [],None
 
 
 def follow(pose: Pose, path, cfg: Config, points=(), loaded=False):

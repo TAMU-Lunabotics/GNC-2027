@@ -49,6 +49,7 @@ def scenario(failure='', dt=0.1, max_steps=12000, seed=None,
             o.lidar_time = 9.0
         if failure == 'camera_loss' and t > 61:
             o.camera_time = 0.0
+            o.pose_sigma = .05+.03*(t-61)
         if failure == 'estop' and t > 10:
             o.estop = True
         if failure == 'mass_sensor' and t > 10:
