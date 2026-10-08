@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lunabotics-autonomy"
+version = "0.2.2"
+description = "Simulation-first Lunabotics autonomy prototype"
+requires-python = ">=3.10"
+
+[project.scripts]
+lunabotics-sitl = "autonomy.sitl:main"
+lunabotics-mission = "autonomy.ros_mission:main"
+lunabotics-fiducials = "autonomy.ros_fiducials:main"
+lunabotics-berm = "autonomy.ros_berm:main"
+
+[tool.setuptools.packages.find]
+include = ["autonomy*"]
