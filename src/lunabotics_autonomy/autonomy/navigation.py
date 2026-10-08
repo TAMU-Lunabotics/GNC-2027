@@ -34,8 +34,7 @@ def _footprint_offsets(pad, cell):
 def observed_footprint(p, cfg, known_free, pad=None):
     if known_free is None:
         return True
-    pad = pad if pad is not None else max(cfg.robot_radius+cfg.clearance,
-                                       cfg.stop_distance+.10)
+    pad = pad if pad is not None else cfg.robot_radius+cfg.clearance
     ci,cj = int(p[0]/cfg.cell),int(p[1]/cfg.cell)
     return all((ci+di,cj+dj) in known_free
                for di,dj in _footprint_offsets(pad,cfg.cell))
@@ -52,7 +51,7 @@ def segment_clear(a, b, points, cfg, known_free=None):
         for index in range(1,steps+1):
             x = a[0]+(b[0]-a[0])*index/steps
             y = a[1]+(b[1]-a[1])*index/steps
-            if not observed_footprint((x,y),cfg,known_free,pad):
+            if not observed_footprint((x,y),cfg,known_free):
                 return False
     return all(point_segment_distance(p, a, b) >= pad for p in points
                if all(math.isfinite(v) for v in p))
@@ -111,7 +110,7 @@ def plan(start: Pose, goal: tuple[float, float], points, cfg: Config, known_free
             if known_free is not None and (i,j) not in known_free:
                 blocked.add((i,j))
             elif known_free is not None and not observed_footprint((x,y),cfg,
-                    known_free,clearance):
+                    known_free):
                 blocked.add((i,j))
     radius = math.ceil((clearance+0.5)/cfg.cell)
     for ox, oy in obstacles:
@@ -181,7 +180,7 @@ def exploratory_route(start: Pose, goal, points, cfg, known_free):
         p = xy(cell)
         if (pad <= p[0] <= cfg.width-pad and
             pad <= p[1] <= cfg.height-pad and
-            observed_footprint(p,cfg,known_free,pad) and
+            observed_footprint(p,cfg,known_free) and
             all(distance(p,obstacle) >= pad for obstacle in obstacles)):
             allowed.add(cell)
     source = (int(start.x/cfg.cell),int(start.y/cfg.cell))

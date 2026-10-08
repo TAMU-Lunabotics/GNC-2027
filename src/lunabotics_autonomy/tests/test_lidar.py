@@ -3,9 +3,11 @@ import unittest
 
 from autonomy.lidar import scan_beams
 from autonomy.navigation import plan, exploratory_route
+from autonomy.navigation import wrap
 from autonomy.occupancy import ObstacleMemory
+from autonomy.mission import Mission
 from autonomy.sitl import SIM_CONFIG
-from autonomy.types import Pose
+from autonomy.types import Pose,Observation,Phase
 
 
 class LidarMappingTests(unittest.TestCase):
@@ -72,6 +74,49 @@ class LidarMappingTests(unittest.TestCase):
         self.assertTrue(route)
         self.assertIsNotNone(goal)
         self.assertLess(goal[0],3.9)
+
+    def test_closed_loop_mapped_drive_reaches_dig_without_collision(self):
+        obstacles = [(3.9,1.15,.2),(3.9,3.25,.2)]
+        pose = Pose(1.1,2.2,0.)
+        memory = ObstacleMemory(SIM_CONFIG)
+        mission = Mission(SIM_CONFIG)
+        for step in range(800):
+            now = step*.1
+            if step%2 == 0:
+                returns = []
+                for i in range(720):
+                    angle = pose.yaw+2*math.pi*i/720
+                    dx,dy = math.cos(angle),math.sin(angle)
+                    rng = 8.
+                    for ox,oy,radius in obstacles:
+                        along = (ox-pose.x)*dx+(oy-pose.y)*dy
+                        lateral2 = (ox-pose.x)**2+(oy-pose.y)**2-along**2
+                        if along > 0 and lateral2 < radius**2:
+                            rng = min(rng,along-math.sqrt(max(0,radius**2-lateral2)))
+                    relative = 2*math.pi*i/720
+                    returns.append((rng*math.cos(relative),
+                                    rng*math.sin(relative),.2 if rng < 8 else -.2))
+                hits,clears,_ = scan_beams(returns,-.15,.65,8)
+                def world(p):
+                    c,s = math.cos(pose.yaw),math.sin(pose.yaw)
+                    return pose.x+c*p[0]-s*p[1],pose.y+s*p[0]+c*p[1]
+                memory.update((pose.x,pose.y),list(map(world,hits)),now,
+                              clear_endpoints=list(map(world,clears)))
+            obs = Observation(now=now,pose=pose,pose_time=now,camera_time=now,
+                lidar_time=now,encoder_time=now,mass_time=now,actuator_time=now,
+                battery_time=now,battery_v=25.,mass_kg=0.,pose_sigma=.05,
+                actuator='raised',estop_time=now,baseline_ready=True,
+                obstacles=memory.points(now),known_free=memory.known_free(now))
+            out = mission.start(obs) if step == 0 else mission.tick(obs)
+            self.assertNotEqual(out.phase,Phase.FAULT,out.fault)
+            if out.phase == Phase.LOWER:
+                return
+            yaw = wrap(pose.yaw+out.angular*.1)
+            pose = Pose(pose.x+out.linear*math.cos(yaw)*.1,
+                        pose.y+out.linear*math.sin(yaw)*.1,yaw)
+            self.assertTrue(all(math.hypot(pose.x-x,pose.y-y) >=
+                SIM_CONFIG.robot_radius+r for x,y,r in obstacles))
+        self.fail('mapped drive did not reach excavation goal')
 
 
 if __name__ == '__main__':
