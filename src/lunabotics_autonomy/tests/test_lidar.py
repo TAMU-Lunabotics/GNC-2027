@@ -2,7 +2,7 @@ import math
 import unittest
 
 from autonomy.lidar import scan_beams
-from autonomy.navigation import plan, exploratory_route
+from autonomy.navigation import plan, exploratory_route, segment_clear
 from autonomy.navigation import wrap
 from autonomy.occupancy import ObstacleMemory
 from autonomy.mission import Mission
@@ -73,7 +73,11 @@ class LidarMappingTests(unittest.TestCase):
                                        m.points(1),SIM_CONFIG,m.known_free(1))
         self.assertTrue(route)
         self.assertIsNotNone(goal)
-        self.assertLess(goal[0],3.9)
+        previous = origin
+        for waypoint in route:
+            self.assertTrue(segment_clear(previous,waypoint,m.points(1),
+                                          SIM_CONFIG,m.known_free(1)))
+            previous = waypoint
 
     def test_closed_loop_mapped_drive_reaches_dig_without_collision(self):
         obstacles = [(3.9,1.15,.2),(3.9,3.25,.2)]
