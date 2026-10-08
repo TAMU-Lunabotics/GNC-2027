@@ -39,7 +39,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y python3-opencv python3-numpy \
-            ros-humble-ament-python ros-humble-sensor-msgs-py \
+            ros-humble-sensor-msgs-py \
             ros-humble-tf2-ros ros-humble-std-srvs
       - name: Build ROS 2 package
         shell: bash
