@@ -120,10 +120,12 @@ def main(args=None):
                     'lowered' if self.tool == 'lower' else 'raised')
             elif self.tool == 'dig':
                 self.actuator = 'digging'
-                self.mass = min(25.6,self.mass+.30*dt)
+                # Accelerated synthetic material flow keeps the CI graph test
+                # short; neither rate represents a measured rover mechanism.
+                self.mass = min(25.6,self.mass+2.0*dt)
             elif self.tool == 'dump':
                 self.actuator = 'dumping'
-                removed = min(self.mass,.45*dt)
+                removed = min(self.mass,4.0*dt)
                 self.mass -= removed
                 self.berm += removed/1.6
             stamp = self.get_clock().now().to_msg()
