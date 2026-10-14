@@ -1,0 +1,18 @@
+guidance_controller:
+  rate_hz: 20.0
+
+  lookahead_m: 0.5           
+  cruise_speed: 0.3
+
+  goal_tolerance_m: 0.10
+  yaw_tolerance_rad: 0.10
+
+  rotate_in_place_angle_rad: 1.05   # ~60 deg
+
+  max_cross_track_m: 0.75
+
+  max_linear_speed: 0.5
+  max_angular_speed: 1.0
+
+  max_linear_accel: 0.5
+  max_angular_accel: 1.5

@@ -1,0 +1,7 @@
+# path_planner: A* on an inflated occupancy grid.
+# See luna_planning/README.md for what each parameter does.
+
+path_planner:
+  robot_radius_m: 0.60          # ASSUMPTION: half the robot diagonal
+  safety_margin_m: 0.10
+  replan_deviation_m: 0.5

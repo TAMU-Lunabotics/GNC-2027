@@ -12,6 +12,14 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 
+rosidl_generate_interfaces(${PROJECT_NAME}
+  # messages
+  "msg/PlannerStatus.msg"
+  "msg/GuidanceStatus.msg"
+  "msg/LocalizationStatus.msg"
+  DEPENDENCIES std_msgs
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights

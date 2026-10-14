@@ -50,7 +50,7 @@ def _setup(context):
                 'out_dir': out_dir,
                 'generate': 'false',
                 'use_sim_time': 'true',
-                'rviz': 'false',          # started below with the level-1 layout
+                'rviz': 'false',
             }.items()),
 
         # 4. Robot description: base_link -> chassis, wheels, sensor frames.
@@ -79,7 +79,7 @@ def _setup(context):
         actions.append(Node(
             package='rviz2', executable='rviz2', name='rviz2', output='screen',
             arguments=['-d', rviz_cfg] if os.path.exists(rviz_cfg) else [],
-            additional_env={'QT_ENABLE_HIGHDPI_SCALING': '0'},   # avoids the flicker
+            additional_env={'QT_ENABLE_HIGHDPI_SCALING': '0'}, 
             parameters=[sim_time]))
 
     return actions

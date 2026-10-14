@@ -1,0 +1,10 @@
+# All values are ASSUMPTIONS until we measure the real drivetrain.
+
+mock_wheel_odometry:
+  rate_hz: 50.0
+
+  pose_noise_std_m: 0.01
+  yaw_noise_std_rad: 0.005
+
+  drift_per_m: 0.02
+  drift_yaw_per_rad: 0.02
