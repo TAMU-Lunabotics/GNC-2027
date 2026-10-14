@@ -33,9 +33,8 @@ def _setup(context):
     use_sim_time = arg('use_sim_time').lower() == 'true'
     publish_truth = arg('publish_truth').lower() == 'true'
 
-    # Runs right now, in the launch process, before any node starts. If the config is
-    # bad, launch fails here with the generator's error instead of map_server failing later.
-    generate_map(config, seed, out_dir, resolution)
+    if arg('generate').lower() == 'true':
+       generate_map(config, seed, out_dir, resolution)
     paths = arena_paths(out_dir, seed)
 
     actions = [
@@ -79,6 +78,9 @@ def _setup(context):
 
 
 def generate_launch_description():
+    # in generate_launch_description():
+    DeclareLaunchArgument('generate', default_value='true', description='false = serve existing files only'),
+
     return LaunchDescription([
         DeclareLaunchArgument('seed', default_value='random',
                               description="integer, or 'random' (the chosen seed is logged)"),

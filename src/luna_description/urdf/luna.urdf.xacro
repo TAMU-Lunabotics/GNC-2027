@@ -1,0 +1,78 @@
+<?xml version="1.0"?>
+<robot name="luna" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- All dimensions come from the geometry YAML. Edit numbers there, not here. -->
+  <xacro:arg name="geometry" default="$(find luna_description)/config/robot_geometry.yaml"/>
+  <xacro:property name="g" value="${xacro.load_yaml('$(arg geometry)')}"/>
+  <xacro:property name="base" value="${g['base']}"/>
+  <xacro:property name="wheels" value="${g['wheels']}"/>
+
+  <!-- base_link: on the ground, midway between the wheels, x forward-->
+  <link name="base_link"/>
+
+  <link name="chassis">
+    <visual>
+      <geometry><box size="${base['length']} ${base['width']} ${base['height']}"/></geometry>
+      <material name="grey"><color rgba="0.6 0.6 0.6 1"/></material>
+    </visual>
+    <collision>
+      <geometry><box size="${base['length']} ${base['width']} ${base['height']}"/></geometry>
+    </collision>
+  </link>
+  <joint name="base_to_chassis" type="fixed">
+    <parent link="base_link"/>
+    <child link="chassis"/>
+    <origin xyz="0 0 ${base['ground_clearance'] + base['height'] / 2}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Wheels: visual only for now -->
+  <xacro:macro name="wheel" params="name x y">
+    <link name="${name}_wheel">
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry><cylinder radius="${wheels['radius']}" length="${wheels['width']}"/></geometry>
+        <material name="black"><color rgba="0.1 0.1 0.1 1"/></material>
+      </visual>
+    </link>
+    <joint name="${name}_wheel_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${name}_wheel"/>
+      <origin xyz="${x} ${y} ${wheels['radius']}" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+    </joint>
+  </xacro:macro>
+  <xacro:wheel name="front_left"  x="${ wheels['wheelbase'] / 2}" y="${ wheels['separation'] / 2}"/>
+  <xacro:wheel name="front_right" x="${ wheels['wheelbase'] / 2}" y="${-wheels['separation'] / 2}"/>
+  <xacro:wheel name="rear_left"   x="${-wheels['wheelbase'] / 2}" y="${ wheels['separation'] / 2}"/>
+  <xacro:wheel name="rear_right"  x="${-wheels['wheelbase'] / 2}" y="${-wheels['separation'] / 2}"/>
+
+  <!-- Sensor frames: one fixed joint each, pose straight from the YAML -->
+  <xacro:macro name="sensor_frame" params="name">
+    <xacro:property name="p" value="${g['sensors'][name]}"/>
+    <link name="${name}"/>
+    <joint name="base_to_${name}" type="fixed">
+      <parent link="base_link"/>
+      <child link="${name}"/>
+      <origin xyz="${p['xyz'][0]} ${p['xyz'][1]} ${p['xyz'][2]}"
+              rpy="${p['rpy'][0]} ${p['rpy'][1]} ${p['rpy'][2]}"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- Camera optical frame: z forward, x right, y down -->
+  <xacro:macro name="optical_frame" params="camera">
+    <link name="${camera}_optical"/>
+    <joint name="${camera}_to_optical" type="fixed">
+      <parent link="${camera}"/>
+      <child link="${camera}_optical"/>
+      <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:sensor_frame name="imu_link"/>
+  <xacro:sensor_frame name="lidar_link"/>
+  <xacro:sensor_frame name="cam_front"/>
+  <xacro:sensor_frame name="cam_rear"/>
+  <xacro:optical_frame camera="cam_front"/>
+  <xacro:optical_frame camera="cam_rear"/>
+
+</robot>

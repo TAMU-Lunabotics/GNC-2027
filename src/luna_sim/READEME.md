@@ -14,17 +14,60 @@ Simulation for the Lunabotics competition.
 ```bash
 # from the workspace root(i.e GNC-2027)
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select luna_sim
+colcon build --symlink-install --packages-up-to luna_sim
 source install/setup.bash
 
 # generate an arena and serve its maps (add rviz:=true to view them)
 ros2 launch luna_sim arena.launch.py seed:=42
 
+# run entire Level 1 sim, as of now that is map, robot, and oracle(perfect) localization
+ros2 launch luna_sim level1.launch.py seed:=42
+
 # or just generate the files
 ros2 run luna_sim arena_gen --seed 42
 ```
 
-Omit `seed` to get a random arena; the chosen seed is printed so you can reproduce it.
+Omit `seed` to get a random arena. The chosen seed is printed so you can reproduce it, use this when testing to make sure that if your work failed in one situation, you get it to work in that situation.
+
+### Level 1 launch arguments
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `seed` | `random` | Arena seed. Same seed + same config = same arena. |
+| `config` | `artemis_arena.yaml` | Arena rules file: a path, or a name in `config/arena/`. |
+| `rtf` | `1.0` | Real-time factor. `2.0` = twice as fast as real time. |
+| `oracle_localization` | `true` | `false` when testing a real localization node instead. |
+| `rviz` | `true` | Open RViz with `rviz/sim.rviz`. |
+| `out_dir` | `luna_sim/generated` | Where generated arena files go. |
+---
+
+
+## What's running in Level 1
+
+```
+sim_clock ──/clock──► (every node runs on sim time)
+
+arena_gen ──► generated/artemis_arena_<seed>.json + known/truth maps
+                 │                         │
+                 │                    map_server ──► /map (only what the robot has detected)
+                 │                    map_server_truth ──► /map_truth (everything)
+                 ▼
+        kinematic_base ◄── /cmd_vel (through command-line, guidance controller later)
+                 │
+                 └──► /sim/ground_truth/pose, /twist
+                              │
+                       oracle_localizer ──► /odometry/filtered
+                                            TF map → odom → base_link
+
+luna_description: robot_state_publisher ──► TF base_link → chassis, wheels, sensors
+```
+
+| Node | Does | Replaced on the real robot by |
+|---|---|---|
+| `sim_clock` | Publishes `/clock`; sets sim speed (`rtf`). | Wall time (no `/clock`). |
+| `kinematic_base` | Integrates `/cmd_vel` into the true pose (diff drive, speed limits, 0.5 s command timeout). Starts at the arena's start pose. | The actual robot + `diff_drive_controller`. |
+| `oracle_localizer` | Publishes ground truth as the localization estimate. | The ESKF (`luna_localization`). |
+| `map_server`, `map_server_truth` | Serve the generated maps. | `map_server` with the known arena map. |
 
 ---
 
@@ -44,6 +87,10 @@ luna_sim/
 │   │   └── paths.py               helper functions for where generated files go and what they're named
 │   └── eval/
 │       └── scorer.py              (planned) scores sim runs
+│   ├── kinematic_base.py          moves the robot following a differential drive model, using the /cmd_vel topic
+│   ├── oracle_localizer.py        publishes perfect state-estimation
+│   └── sim_clock.py
+├── rviz/sim.rviz                  saved RViz layout (QoS already set correctly)
 ├── scripts/                       executables for `ros2 run` (thin wrappers)
 ├── generated/                     generated arenas (git-ignored)
 ├── worlds/                        arenas worth keeping (checked in)
@@ -51,8 +98,6 @@ luna_sim/
 ├── CMakeLists.txt
 └── package.xml
 ```
-Note: luna_sim is a cpp package, so some extra work is needed so that python code can be run with "ros2 run ...". The scripts folder is what helps do this. If you need to get a
-python file to run and get stuck, let me(JP) know and I can help.
 
 ### What goes where
 
@@ -61,6 +106,7 @@ python file to run and get stuck, let me(JP) know and I can help.
 | `config/` | Hand-written settings: arena rules, scenarios. | Yes |
 | `launch/` | Launch files. | Yes |
 | `luna_sim/` | All Python logic. Every folder needs an `__init__.py`. | Yes |
+| `rviz/` | RViz layouts. Edit in RViz, then File → Save Config. | Yes |
 | `scripts/` | One 3-line wrapper per runnable command (see below). No logic. | Yes |
 | `generated/` | Output of `arena_gen`: per seed, a `.json` layout plus `known` and `truth` maps (`.pgm` + `.yaml`). Disposable. | **No** |
 | `worlds/` | Arenas we want to keep, e.g. a seed that caught a bug. Copy them here from `generated/`. Gazebo worlds later. | Yes |

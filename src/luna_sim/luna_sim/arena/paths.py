@@ -12,7 +12,7 @@ def arena_paths(out_dir, seed):
     """All files the generator writes for one seed."""
     out = Path(out_dir).expanduser().resolve()
     return {
-        'json': out / f'arena_{seed}.json',
+        'json': out / f'artemis_arena_{seed}.json',
         'known_map': out / f'artemis_arena_{seed}_known.yaml',
         'truth_map': out / f'artemis_arena_{seed}_truth.yaml',
     }

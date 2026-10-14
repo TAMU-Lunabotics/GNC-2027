@@ -20,6 +20,9 @@ find_package(nav_msgs REQUIRED)
 
 set(PY_EXECUTABLES
   arena_gen
+  kinematic_base
+  oracle_localizer
+  sim_clock
   # scorer
 )
 

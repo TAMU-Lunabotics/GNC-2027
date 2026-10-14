@@ -5,7 +5,7 @@
 #   +x: along the 6.88 m length, from the starting/excavation end toward the construction end
 #   +y: along the 5.0 m width; must point LEFT when looking down +x from the origin
 #   +z: up
-
+# Note: lines with marked with assumption are ones where the data in that line is not confirmed, the point of the tag is so that we can grep these lines later to see what still needs to be confirmed
 
 arena:
   length: 6.88

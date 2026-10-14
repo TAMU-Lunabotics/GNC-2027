@@ -1,0 +1,20 @@
+# bare bones robot description, we'll update as the design of the robot gets finalized, all though very little of the design specifics actually affect us
+# Units: m, rad
+
+base:
+  length: 1.0          # ASSUMPTION
+  width: 0.7           # ASSUMPTION
+  height: 0.4          # ASSUMPTION
+  ground_clearance: 0.15  # bottom of chassis above ground
+
+wheels:
+  radius: 0.15       # ASSUMPTION
+  width: 0.10        # ASSUMPTION
+  separation: 0.6    # ASSUMPTION
+  wheelbase: 0.70 # ASSUMPTION
+
+sensors:
+  imu_link:   {xyz: [0.0, 0.0, 0.20],  rpy: [0.0, 0.0, 0.0]}
+  cam_front:  {xyz: [0.48, 0.0, 0.50], rpy: [0.0, 0.30, 0.0]}
+  cam_rear:   {xyz: [-0.48, 0.0, 0.50], rpy: [0.0, 0.30, 3.14159]}
+  lidar_link: {xyz: [0.0, 0.0, 0.65],  rpy: [3.14159, 0.0, 0.0]}   # mounted upside down
