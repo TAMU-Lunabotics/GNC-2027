@@ -54,3 +54,7 @@ Every cross-team interface must define:
 | Autonomy state / cycle state | Autonomy | CDH/MCC | WORKING | Should expose hands-free/manual state and cycle phase |
 
 Hardware drivers and low-level transport belong in CDH; GNC should operate against stable software interfaces.
+
+## Working autonomy candidate
+
+The new `src/lunabotics_autonomy` package is **WORKING**, not an approved current-season interface. Its proposed topic, frame, unit, rate, and timeout contracts are in [WORKING_AUTONOMY.md](WORKING_AUTONOMY.md). It publishes a measured obstacle grid and path for Mission Control, then sends logical motion and tool commands to CDH. It launches no motor controller. Joint GNC/CDH approval is required before hardware enablement.

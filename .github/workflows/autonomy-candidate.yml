@@ -1,0 +1,59 @@
+name: Autonomy candidate checks
+
+on:
+  pull_request:
+    paths:
+      - 'src/lunabotics_autonomy/**'
+      - '.github/workflows/autonomy-candidate.yml'
+  push:
+    paths:
+      - 'src/lunabotics_autonomy/**'
+
+jobs:
+  pure-python:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: python -m pip install numpy setuptools wheel
+      - run: python -m unittest discover -s tests -q
+        working-directory: src/lunabotics_autonomy
+      - run: python -m compileall -q autonomy launch
+        working-directory: src/lunabotics_autonomy
+      - run: python -m pip wheel --no-deps --no-build-isolation .
+        working-directory: src/lunabotics_autonomy
+
+  ros-graph:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 18
+    container:
+      image: ros:humble-ros-base-jammy
+    env:
+      ROS_DOMAIN_ID: '213'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install package dependencies
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y python3-opencv python3-numpy \
+            ros-humble-sensor-msgs-py \
+            ros-humble-tf2-ros ros-humble-std-srvs
+      - name: Build ROS 2 package
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --base-paths src/lunabotics_autonomy --packages-select lunabotics_autonomy
+      - name: Complete synthetic ROS graph mission
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          set -euo pipefail
+          ros2 launch lunabotics_autonomy graph_sitl.launch.py > /tmp/lunabotics-graph.log 2>&1 &
+          graph_pid=$!
+          trap 'kill "$graph_pid" 2>/dev/null || true; tail -100 /tmp/lunabotics-graph.log' EXIT
+          sleep 5
+          timeout 750s ros2 run lunabotics_autonomy graph_acceptance
