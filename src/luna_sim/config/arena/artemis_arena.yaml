@@ -1,0 +1,72 @@
+# numbers based off of https://www.nasa.gov/artemis-arena-6/ and the guidebook
+# units: meters, radians
+# Frame (map), right-handed:
+#   origin: corner of the arena walls in the starting zone
+#   +x: along the 6.88 m length, from the starting/excavation end toward the construction end
+#   +y: along the 5.0 m width; must point LEFT when looking down +x from the origin
+#   +z: up
+
+
+arena:
+  length: 6.88
+  width: 5.0
+  depth: 0.45
+  perimeter_duct:
+  height: 0.00 # look into how high the duct is off the ground
+  diameter: 0.17
+
+zones:
+  excavation:   {cx: 1.25, cy: 2.5, length: 2.5,  width: 5.0}
+  obstacle:     {cx: 4.69, cy: 2.5, length: 4.38, width: 5.0}
+  starting:     {cx: 1.00, cy: 1.00, length: 2.00, width: 2.00}   # these are kind of stated in the guidebook
+  berm_target:  {cx: 5.38, cy: 0.90, length: 2.2, width: 0.90}
+
+obstacles:
+  boulders:
+    zone: obstacle
+    diameter: [0.30, 0.40]
+    count: [3, 7] # maximum not explicitly stated in the guidebook, but it is the number that is used in the example images, so we will use it as a maximum # ASSUMPTION
+    height: [0.15, 0.25] # ASSUMPTION
+
+  excavation_boulders:
+    zone: excavation
+    diameter: [0.30, 0.40]
+    count: [3, 7] # same as above # ASSUMPTION
+    height: [0.15, 0.25] # ASSUMPTION
+
+  craters:
+    zone: obstacle
+    diameter: [0.10, 0.50] # lower bound not given #ASSUMPTION
+    depth: [0.15, 0.45] # lower bound not given #ASSUMPTION
+    count: [3, 5] # once again, not explicitly stated, but this time the example image showed 3 craters, so will just assume 5 is the maximum # ASSUMPTION
+
+  excavation_craters:
+    zone: excavation
+    diameter: [0.10, 0.50] # lower bound not given #ASSUMPTION
+    depth: [0.15, 0.45] # lower bound not given #ASSUMPTION
+    count: [3, 5] # max is not explicitly stated # ASSUMPTION
+
+#central_column:
+#cx: null
+#cy: null
+#size: null 
+
+materials: # used later on by Gazebo
+  gravel:
+  diameter: 0.02
+
+placement:
+  min_spacing: 0.30 # minimum spacing between obstacles
+  wall_margin: 0.20 # minimum distance from the arena walls
+  keep_out: [starting, berm_target] # zones to avoid when placing obstacles
+  max_attempts: 100 # maximum number of attempts to place an obstacle before giving up
+
+start:
+  zone: starting
+  length: [0.0, 2.0] 
+  width: [0.0, 2.0]
+  cx: 1.0
+  cy: 1.0
+  yaw: [0, 1.5708, 3.1416, 4.7124] # 0, 90, 180, 270 degrees in radians
+
+# add support structure
