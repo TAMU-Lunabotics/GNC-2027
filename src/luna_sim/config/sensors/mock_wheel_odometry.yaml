@@ -7,4 +7,4 @@ mock_wheel_odometry:
   yaw_noise_std_rad: 0.005
 
   drift_per_m: 0.02
-  drift_yaw_per_rad: 0.02
+  : 0.02

@@ -1,14 +1,13 @@
 # All values are ASSUMPTIONS until the real sensor is characterized.
 
 mock_obstacle_detector:
-  ros__parameters:
-    rate_hz: 10.0
+  rate_hz: 10.0
 
-    # Visibility (measured from the sensor, to the obstacle's edge)
-    min_range_m: 0.3
-    max_range_m: 3.0
-    fov_deg: 90
+  # Visibility (measured from the sensor, to the obstacle's edge)
+  min_range_m: 0.3
+  max_range_m: 3.0
+  fov_deg: 90
 
-    # Noise at zero range(scaled up with distance by the node)
-    position_noise_std_m: 0.03
-    radius_noise_std_m: 0.02
+  # Noise at zero range(scaled up with distance by the node)
+  position_noise_std_m: 0.03
+  radius_noise_std_m: 0.02

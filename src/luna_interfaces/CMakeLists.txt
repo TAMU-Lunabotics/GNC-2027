@@ -17,7 +17,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PlannerStatus.msg"
   "msg/GuidanceStatus.msg"
   "msg/LocalizationStatus.msg"
-  DEPENDENCIES std_msgs
+  "msg/TagDetection.msg"
+  "msg/TagDetectionArray.msg"
+  DEPENDENCIES std_msgs geometry_msgs
 )
 
 if(BUILD_TESTING)

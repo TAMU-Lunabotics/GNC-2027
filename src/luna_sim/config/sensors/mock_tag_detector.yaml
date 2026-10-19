@@ -1,0 +1,19 @@
+mock_tag_detector:
+  ros__parameters:
+    rate_hz: 10.0                       # per camera
+    cameras: [cam_front, cam_rear]      # names from robot_geometry.yaml; optical frame = <name>_optical
+
+    image_width_px: 1280
+    image_height_px: 720
+    hfov_deg: 90.0                      # horizontal field of view
+    vfov_deg: 60.0                      # vertical field of view
+
+    min_range_m: 0.2
+    max_range_m: 4.0
+    max_view_angle_deg: 70.0            # tag normal vs. line to camera
+    min_tag_pixels: 20.0
+
+    position_noise_base_m: 0.005
+    position_noise_per_m2: 0.004        # extra std per (distance in m)^2
+    rotation_noise_base_rad: 0.01
+    rotation_noise_per_rad: 0.05        # extra std per rad of viewing angle

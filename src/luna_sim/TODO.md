@@ -1,151 +1,18 @@
-# Mock Localization (Noisy Localizer)
+# mock_localization_sensor
 
-**Owner:** _______ · **Status:** v1 in progress · **Package:** `luna_sim` (sim only) · **Node:** `noisy_localizer`
 
-## What it does
+## What it is
 
-Pretends to be the robot's localization system, with **realistic errors**. It publishes exactly what the real localization (the ESKF) will publish, but builds it from simulator ground truth plus a model of how localization goes wrong: noise, slow drift, sudden corrections when a tag is seen, and periods with no correction at all.
+Pretends to be the robot's wheel encoders and the odometry computed from them. It takes the robot's true motion from the simulator and produces what the real encoders would report, including the ways encoders can be inaccurate, a skid-steer robot scrubs when it turns, and encoders count in discrete ticks.
 
-Why it exists: the current `oracle_localizer` is *perfect*, so the planner and controller have never been tested against the imperfect pose they'll get on the real robot. This node sits between the oracle and the real ESKF:
-
-| Mode | Node | Use it to |
-|---|---|---|
-| Perfect | `oracle_localizer` | Develop planning/guidance logic. |
-| **Realistic errors** | **`noisy_localizer`** | Prove planning/guidance survive real-world localization. |
-| Real | ESKF (`luna_localization`, later) | The actual thing. |
-
-All three publish the same interfaces. **Only one may run at a time**: they all publish `map → odom → base_link`.
+On the real robot, we'll read the data from the encoder and publish odometry based off on this to `/wheel_odom`. This node publishes to the same topic, so the localization filter can be developed against realistic odometry now, and swap to real hardware later without changing.
 
 ```
-/sim/ground_truth/pose ──┐
-/sim/ground_truth/twist ─┴──► noisy_localizer ──► /odometry/filtered
-                                               ├─► TF map → odom, odom → base_link
-                                               └─► /localization/status
+/sim/ground_truth/twist ──► mock_wheel_odometry ──► /wheel_odom     (integrated odometry)
+robot_geometry.yaml ─────┘
 ```
 
----
-
-## Interfaces
-
-### Inputs
-
-| Topic | Type | Frame | Notes |
-|---|---|---|---|
-| `/sim/ground_truth/pose` | `geometry_msgs/msg/PoseStamped` | `map` | True pose, 50 Hz. |
-| `/sim/ground_truth/twist` | `geometry_msgs/msg/TwistStamped` | `base_link` | True velocity. |
-| `arena_json` parameter *(optional)* | path | `map` | Only needed if fixes depend on where tags are (v2). |
-
-### Outputs: identical to the oracle and the future ESKF
-
-| Topic / TF | Type | Frame | QoS | Notes |
-|---|---|---|---|---|
-| `/odometry/filtered` | `nav_msgs/msg/Odometry` | pose in `map`, twist in `base_link`, `child_frame_id: base_link` | reliable, depth 10 | ≥ 30 Hz. **Covariance must be filled** with your model's current uncertainty (diagonal: x, y, z, roll, pitch, yaw). Never all zeros. |
-| TF `odom → base_link` | `tf2_msgs/TFMessage` | — | — | **Smooth.** Drifts slowly but never jumps. |
-| TF `map → odom` | `tf2_msgs/TFMessage` | — | — | **Jumps** at corrections. Absorbs the drift. |
-| `/localization/status` | `luna_interfaces/msg/LocalizationStatus` | — | reliable, transient local | `OK` / `DEGRADED` / `LOST`, position and yaw σ, seconds since the last fix. |
-
-Message definition: `luna_interfaces/msg/LocalizationStatus.msg`.
-
----
-
-## The error model (what makes this realistic)
-
-Real localization has two layers, and this node should reproduce both, because **the planner and controller must handle both**:
-
-1. **Odometry drifts.** Between absolute fixes, the estimate is dead reckoning, and its error grows continuously and smoothly. Model it as a drift state `(dx, dy, dθ)` that does a **random walk** while the robot moves (scale the step with distance traveled and with turning). The `odom → base_link` transform = truth + drift. Smooth, so the controller sees gradual error, never a jump.
-2. **Fixes cause jumps.** Every so often the robot "sees a tag" and corrects. At a fix, set the `map`-frame estimate to truth + small fix noise, then put the correction in **`map → odom`** so `odom → base_link` stays continuous. This is exactly how REP-105 says it should look, and what the ESKF will do.
-
-Plus:
-
-3. **Measurement noise.** Small white noise on the published `map`-frame pose each message (`pose_noise_std_m`, `yaw_noise_std_rad`).
-4. **Fix schedule.** A fix every `fix_period_s` on average (randomized). **Blackout windows:** with `blackout_probability`, skip fixes for `blackout_duration_s`. Drift grows unchecked, as when no tag is visible.
-5. **Status follows the model.**
-   - `OK` normally;
-   - `DEGRADED` when `seconds_since_absolute_fix > degraded_after_s`;
-   - `LOST` when the estimated σ exceeds `lost_std_m`.
-   - Covariance and `position_std_m` grow with time since the last fix and shrink at each fix.
-6. **Reproducible:** RNG seeded from a `seed` parameter.
-
-### Parameters (`config/sensors/noisy_localizer.yaml`)
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `rate_hz` | `30.0` | Publish rate of `/odometry/filtered`. |
-| `pose_noise_std_m` / `yaw_noise_std_rad` | `0.01` / `0.005` | White noise per message. |
-| `drift_per_m` / `drift_yaw_per_rad` | `0.02` / `0.02` | Random-walk drift growth per meter traveled / radian turned. |
-| `fix_period_s` | `3.0` | Mean time between absolute fixes. |
-| `fix_noise_std_m` | `0.03` | Error left after a fix. |
-| `blackout_probability` / `blackout_duration_s` | `0.05` / `10.0` | Chance per fix of entering a no-fix window, and its length. |
-| `degraded_after_s` / `lost_std_m` | `5.0` / `0.5` | Status thresholds. |
-| `seed` | `0` | RNG seed. |
-
-All defaults are ASSUMPTIONS, to be replaced with real ESKF performance numbers once it exists.
-
----
-
-## Structure (inside `luna_sim`)
-
-```
-luna_sim/
-├── config/sensors/noisy_localizer.yaml
-├── luna_sim/localization/
-│   ├── __init__.py
-│   ├── error_model.py             drift, fixes, noise, status. NO ROS IMPORTS.
-│   └── noisy_localizer.py         ROS node (TF + odometry + status)
-├── scripts/noisy_localizer.py     3-line wrapper; add to PY_EXECUTABLES
-└── test/test_error_model.py       plain pytest
-```
-
-`error_model.py` should be a class with something like `update(true_x, true_y, true_yaw, dt) -> (map_pose, odom_pose, map_to_odom, sigma, status)`. All the interesting logic lives there and is testable without ROS. Use `oracle_localizer.py` as the template for the node side (TF broadcasting, odometry message, covariance layout).
-
-Then change `launch/level1.launch.py`'s `oracle_localization` argument into `localization:=oracle|noisy|none` (default `oracle`) and start your node for `noisy`.
-
----
-
-## Testing
-
-**Unit tests (no ROS):** all noise parameters 0 → output equals truth exactly; robot standing still → no drift growth; drift grows with distance traveled; at a fix, `map` estimate snaps near truth **and** `odom → base_link` doesn't jump; status goes `OK → DEGRADED → LOST` during a long blackout; same seed → same sequence.
-
-**In the sim:**
-```bash
-ros2 launch luna_sim level1.launch.py seed:=42 localization:=noisy
-ros2 run teleop_twist_keyboard teleop_twist_keyboard
-```
-In RViz show **both** `/sim/ground_truth/pose` (Pose display, one color) and `/odometry/filtered` (Odometry display, another color). Drive around: the estimate should wander slowly away from the truth and snap back at fixes. Plot error over time in PlotJuggler: x of truth vs x of estimate. You should see a sawtooth (growing drift, sudden correction).
-
-```bash
-ros2 run tf2_ros tf2_echo map odom --ros-args -p use_sim_time:=true   # should change only at fixes
-ros2 topic echo /localization/status
-```
-
-## Definition of done (v1)
-
-- [ ] Unit tests pass for the cases above.
-- [ ] In RViz: estimate drifts smoothly, corrects at fixes; `map → odom` changes only at fixes.
-- [ ] Covariance and status behave as specified during a forced blackout.
-- [ ] Planner + guidance reach goals on 5 seeds with `localization:=noisy` (that's the point of this node).
-
-## Later (v2)
-
-Fixes only when a tag is actually in a camera's field of view (needs the tag layout in the arena JSON); latency between measurement and publish; occasional bad fixes (outliers) to test robustness.
-
-# Mock Obstacle Detector
-
-**Owner:** _______ · **Status:** v1 in progress · **Package:** `luna_sim` (sim only) · **Node:** `mock_obstacle_detector`
-
-## What it does
-
-Pretends to be the robot's obstacle detection. It knows the real arena layout (from the arena JSON) and the robot's true pose, and publishes **only what a real sensor would see**: obstacles within range and field of view, with realistic position/size errors and occasional misses.
-
-It stands in for the real perception pipeline (lidar → `obstacle_detector`) so the **path planner can be developed now**. Later, Gazebo and the real lidar replace it, publishing the same topic. The planner must not notice the swap.
-
-```
-arena_<seed>.json ──────────┐
-/sim/ground_truth/pose ─────┴──► mock_obstacle_detector ──► /perception/obstacles ──► path planner
-                                                         └─► /perception/obstacle_markers (RViz)
-```
-
-This node lives in `luna_sim` **because it reads ground truth**, which only sim nodes may do. Its *output* is a normal perception topic.
+This node lives in `luna_sim` because it reads ground truth, which only sim nodes may do. Its*outputs are normal topics that will be used on the real robot.
 
 ---
 
@@ -155,59 +22,127 @@ This node lives in `luna_sim` **because it reads ground truth**, which only sim 
 
 | Source | Type | Frame | Notes |
 |---|---|---|---|
-| `arena_json` parameter | path to `arena_<seed>.json` | `map` | Read once at startup with `luna_sim.arena.layout.load_layout()`. `layout['obstacles']` is a list of `{name, kind, x, y, diameter, height \| depth}`. |
+| `/sim/ground_truth/twist` | `geometry_msgs/msg/TwistStamped` | `base_link` | True body velocity from `kinematic_base`, 50 Hz: `linear.x` (m/s), `angular.z` (rad/s). The motion that *actually* happened. |
+| `luna_description/config/robot_geometry.yaml` | YAML | — | Used to get `wheels.radius`, `wheels.separation`. Pass the path as the `geometry_yaml` parameter. |
+
+### Outputs:
+
+| Topic | Type | Frame | QoS | Notes |
+|---|---|---|---|---|
+| `/wheel_odom` | `nav_msgs/msg/Odometry` | `header.frame_id: odom`, `child_frame_id: base_link` | reliable, depth 10 | 50 Hz. Pose integrated from the encoders, starting at (0, 0, 0) when the node starts. Twist in `base_link`: `linear.x`, `angular.z` from the wheel speeds. Fill the covariance (see below). |
+
+**Publishes NO TF.** On our robot, localization owns `odom → base_link`, publishing TF here would fight the oracle / EKF.
+---
+
+## Error
+
+Use a zero-mean gaussian distibution to add error to the ground truth data you're using before publishing to `/wheel_odom` in order to make this more realistic. Later on we'll add more complicated and realistic way of introducing error, like modeling slip. Make this error get worse when the rover is moving faster
+
+Integrate each wheel's angle, then quantize to `2π / ticks_per_rev` before publishing. Wheel velocity = change in quantized angle / dt, since encoders can only count discrete rotations, so velocity is noisy at low speed.
+
+Integrate `(x, y, θ)` in the `odom` frame (midpoint heading, like `kinematic_base`).
+
+The mismatch between step 1 (true geometry + slip) and step 4 (nominal geometry) is what makes the odometry drift. **You don't add drift by hand; it falls out of the physics.** That's the point: errors that look like the real robot's, for the same reasons.
+
+Fill `pose.covariance` and `twist.covariance` (6×6, row-major; x, y, z, roll, pitch, yaw) based off of the noise you generated and added to the odometry data. Never all zeroes.
+
+**Reproduciblity.** Seed the RNG from a `seed` parameter (launch passes the arena seed).
+
+
+### Parameters (`config/sensors/mock_wheel_odometry.yaml`)
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `geometry_yaml` | *(set by launch)* | Path to `robot_geometry.yaml` (nominal wheel radius and separation). |
+| `rate_hz` | `50.0` | Publish rate. |
+| `ticks_per_rev` | `4096` | Encoder ticks per wheel revolution (after gearing). |
+| `pose_noise_std_m` | `4096` | Standard deviation for pose accuracy. |
+| `yaw_noise_std_rad` | `0.05` | Standard deviation for rotation accuracy. |
+| `drift_per_m` | `0.02` | Drift in pose accuracy per m. |
+| `drift_yaw_per_rad` | `0.02` | Drift in rotation accuracy per rad. |
+| `seed` | `0` | RNG seed. |
+
+
+
+All defaults are ASSUMPTIONS until we measure the real drivetrain.
+
+---
+
+## Structure (inside `luna_sim`)
+
+```
+luna_sim/
+├── config/sensors/mock_wheel_odometry.yaml
+├── luna_sim/sensors/
+│   ├── __init__.py
+│   └── mock_wheel_odometry.py
+├── scripts/mock_wheel_odometry.py 3-line wrapper, add to PY_EXECUTABLES
+└── test/test_wheel_model.py       plain pytest
+```
+
+Then add the node to `launch/level1.launch.py` with `geometry_yaml`, `seed` and `use_sim_time` parameters.
+
+Make sure to read the `luna_sim` README before working.
+
+---
+
+# mock_obstacle_detector
+
+## What it is
+
+Pretends to be the robot's obstacle detection. It knows the real arena layout (from the arena JSON) and the robot's true pose, and publishes only what a real sensor would see, obstacles within range and field of view, with realistic position/size errors.
+
+It stands in for the real perception pipeline (lidar → `obstacle_detector`) so the path planner can be developed now. Later, Gazebo and the real lidar replace it, publishing the same topic. The planner must not notice the swap.
+
+```
+/map (walls, from map_server) ──────────┐
+artemis_arena_<seed>.json ──────────────┤
+/sim/ground_truth/pose ─────────────────┴──► mock_obstacle_detector ──► /map_updates ──► planner, RViz
+```
+
+This node lives in `luna_sim` because it reads ground truth, which only sim nodes may do. Its output is a normal perception topic.
+
+---
+
+## Interfaces
+
+### Inputs
+
+| Source | Type | Frame | Notes |
+|---|---|---|---|
+| `arena_json` parameter | path to `artemis_arena_<seed>.json` | `map` | Read once at startup with `luna_sim.arena.layout.load_layout()`. `layout['obstacles']` is a list of `{name, kind, x, y, diameter, height \| depth}`. |
+| `/map` | `nav_msgs/msg/OccupancyGrid` | `map` | reliable, transient local | The initial(empty) map. Gives the grid geometry (`info.resolution`, `info.width`, `info.height`, `info.origin`) and the starting cell values. Published once, wait for it before publishing anything. |
 | `/sim/ground_truth/pose` | `geometry_msgs/msg/PoseStamped` | `map` | True robot pose from `kinematic_base`, 50 Hz. |
-| `luna_description/config/robot_geometry.yaml` | YAML | `base_link` | Sensor mounting pose (`sensors.lidar_link.xyz`), so range is measured from the sensor, not the robot center. Optional in v1. |
+| `luna_description/config/robot_geometry.yaml` | YAML | `base_link` | Sensor mounting pose (`sensors.lidar_link.xyz`), so range is measured from the sensor, not the robot center. |
 
 ### Outputs
 
 | Topic | Type | Frame | QoS | Notes |
 |---|---|---|---|---|
-| `/perception/obstacles` | `luna_interfaces/msg/ObstacleArray` | `map` | reliable, depth 10 | Published at `rate_hz` (10 Hz) **every cycle**, even if empty. `header.stamp` = time of the pose used. |
-| `/perception/obstacle_markers` | `visualization_msgs/msg/MarkerArray` | `map` | reliable, depth 1 | **Debug.** Cylinders for detections (e.g. boulders orange, craters blue). |
-
-Message definitions: `luna_interfaces/msg/ObstacleArray.msg`, `Obstacle.msg`. Fill every field:
-
-| Field | Value |
-|---|---|
-| `id` | Stable per real obstacle (its index in the JSON list). The planner uses it to remember obstacles. |
-| `kind` | `BOULDER` or `CRATER`, from the JSON `kind`. |
-| `position` | True center + noise. `z = 0`. |
-| `radius` | True `diameter / 2` + noise, never below a small positive minimum. |
-| `height` | Boulders: `+height`. Craters: `-depth`. |
-| `confidence` | 1.0 near the robot, falling toward `0.5` at max range. |
-
----
+| `/map_updates` | `map_msgs/msg/OccupancyGridUpdate` | `map` | reliable, depth 10 | This topic takes in new maps and updates the map from `/map` using it. |
 
 ## Required behavior
 
-1. **Visibility.** An obstacle is detected only if:
-   - its distance from the sensor is within `[min_range_m, max_range_m]`, and
-   - it is inside the horizontal field of view (`fov_deg` centered on the robot's heading; 360 = all around).
+1. Each cycle (`rate_hz`) perform detection. An obstacle is visible if the distance from the sensor to its edge (center distance − radius) is within `[min_range_m, max_range_m]` and it's inside the horizontal field of view, `fov_deg`, centered on the robot's heading.
 
-   Use the distance to the obstacle's **edge** (center distance − radius), so large obstacles appear when their edge comes into range.
-2. **Noise.** Add Gaussian noise to position (`position_noise_std_m`) and radius (`radius_noise_std_m`). Scale it up with distance (e.g. ×(1 + d / max_range)). Far detections are worse.
-3. **Misses.** Drop each visible obstacle with probability `miss_probability` per cycle. Real detectors flicker; the planner's memory must cope.
-4. **(Optional) false positives.** With probability `false_positive_rate` per cycle, add a small fake boulder at a random visible spot, `confidence` ≤ 0.6, with a fresh `id` range (e.g. ≥ 10000).
-5. **(Optional, v2) occlusion.** Hide obstacles fully behind a nearer boulder. Skip in v1.
-6. **Reproducible.** Seed the random generator from a `seed` parameter (launch passes the arena seed). Same seed → same noise sequence.
-7. **Fixed rate.** Publish on a timer at `rate_hz` using the latest pose, on the node clock (`use_sim_time`).
+2. Add sensor error. Gaussian noise on position (`position_noise_std_m`) and radius (`radius_noise_std_m`), scaled up with distance (e.g. ×(1 + d / max_range)).
+
+3. Rasterize each detection as a filled circle, set cells whose **center** is inside the circle to 1. Boulders and craters are both obstacles. Never set a cell back to free, you only add.
+
+**Reproducibility**: Seed the RNG from a `seed` parameter (launch passes the arena seed).
 
 ### Parameters (`config/sensors/mock_obstacle_detector.yaml`)
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `arena_json` | *(required)* | Path to the arena layout; set by `level1.launch.py`. |
-| `rate_hz` | `10.0` | Publish rate. |
-| `min_range_m` / `max_range_m` | `0.3` / `3.0` | Detection range. |
-| `fov_deg` | `360.0` | Horizontal field of view (Mid-360 lidar ≈ 360). |
-| `position_noise_std_m` | `0.03` | At zero range. |
-| `radius_noise_std_m` | `0.02` | At zero range. |
-| `miss_probability` | `0.05` | Per obstacle, per cycle. |
-| `false_positive_rate` | `0.0` | Per cycle. Off by default. |
+| `arena_json` | *(set by launch)* | Arena layout path. |
+| `rate_hz` | `10.0` | Detection / update rate. |
+| `min_range_m` / `max_range_m` | `0.3` / `3.0` | Detection range (to the obstacle edge). |
+| `fov_deg` | `360.0` | Horizontal field of view. |
+| `position_noise_std_m` / `radius_noise_std_m` | `0.03` / `0.02` | At zero range. |
 | `seed` | `0` | RNG seed. |
 
-Every number here is an ASSUMPTION until we characterize the real sensor; keep them all in the YAML, none in code.
+All values are ASSUMPTIONS until the real sensor is characterized, keep them in the YAML, none in code.
 
 ---
 
@@ -218,38 +153,110 @@ luna_sim/
 ├── config/sensors/mock_obstacle_detector.yaml
 ├── luna_sim/sensors/
 │   ├── __init__.py
-│   ├── visibility.py              in_range / in_fov / noise helpers. NO ROS IMPORTS.
 │   └── mock_obstacle_detector.py  ROS node
-├── scripts/mock_obstacle_detector.py   3-line wrapper; add to PY_EXECUTABLES
-└── test/test_visibility.py        plain pytest
+├── scripts/mock_obstacle_detector.py   3-line wrapper, add to PY_EXECUTABLES
+└── test/
+    ├── test_visibility.py
+    └── test_grid_patch.py
 ```
 
-Then add the node to `launch/level1.launch.py` with `arena_json=paths['json']`, `seed=seed`, `use_sim_time=True`, behind an `obstacle_sensor` launch argument (default `true`).
+Add the node to `launch/level1.launch.py` with `arena_json=paths['json']`, `seed=seed`, `use_sim_time=True`, behind an `obstacle_sensor` argument (default `true`).
 
-Conventions: `load_layout()` for the JSON (never parse it yourself); node clock only; full imports. See the `luna_sim` README.
+Conventions: `load_layout()` for the JSON, node clock only, timer-driven publishing, full imports. See the `luna_sim` README.
 
 ---
 
-## Testing
+# mock_tag_detector
 
-**Unit tests (no ROS):** obstacle at 2 m straight ahead → visible; at 5 m → not; behind the robot with `fov_deg: 90` → not; with 360 → visible; edge-distance logic (big obstacle, center out of range, edge in range → visible); noise = 0 → exact values; same seed → same output.
+## What it is
 
-**In the sim:**
-```bash
-ros2 launch luna_sim level1.launch.py seed:=42
-ros2 run teleop_twist_keyboard teleop_twist_keyboard
+The real robot finds out where it is partly by using fiducial markers, AprilTags in our case, mounted at known spots on the arena walls. A camera sees a tag, a detector measures where that tag is relative to the camera, and since we know where the tag is in the arena, localization can work backward to where the robot must be.
+
+This node pretends to be the camera + tag detector. It knows where every tag is using the arena_layout.json and where the robot truly is (from simulation ground truth), works out which tags each camera could see, and publishes what a real detector would report, each visible tag's pose in the camera frame, with realistic noise.
+
+
 ```
-In RViz show `/map_truth` (where obstacles really are) and `/perception/obstacle_markers` (what the robot sees). Drive around: markers should appear as the robot approaches obstacles, sit on top of the true ones with a little jitter, and disappear as it drives away.
-
-```bash
-ros2 topic hz /perception/obstacles      # ~10 Hz, steady
-ros2 topic echo /perception/obstacles --once
+artemis_arena_<seed>.json (tag poses) ──┐
+robot_geometry.yaml (cameras) ──────────┤
+/sim/ground_truth/pose ─────────────────┴─► mock_tag_detector ──► /tags/detections ──► (tag_localizer → EKF, later)
+                                                       └─► /tags/markers  (RViz debug)
 ```
 
-## Definition of done (v1)
+This node lives in `luna_sim` because it reads ground truth, which only sim nodes may do. Its output is exactly what the real `tag_detector` will publish, so the real one can replace it later without anything downstream changing.
 
-- [ ] Unit tests pass for the cases above.
-- [ ] In RViz, detections line up with `/map_truth` within the configured noise and only appear in range/FOV.
-- [ ] Publishes at a steady 10 Hz, including empty arrays.
-- [ ] Same seed + same drive → same detections.
-- [ ] Planner owner has used it to plan around obstacles.
+**Read first:** `luna_sim/README.md` (how the sim fits together, how to add a node).
+
+---
+
+## Interfaces
+
+### Inputs
+
+| Source | Type | Frame | Notes |
+|---|---|---|---|
+| `arena_json` parameter | path to `artemis_arena_<seed>.json` | `map` | Read once with `luna_sim.arena.layout.load_layout()`. `layout['tags']` is a list of `{id, size, x, y, z, yaw}`. (x,y,z) is the tag center position, and `yaw` is the direction the tag's face points, in `map`. Tags are vertical (mounted on walls). |
+| `geometry_yaml` parameter | path to `luna_description/config/robot_geometry.yaml` | `base_link` | Camera mounting poses: `sensors.cam_front`, `sensors.cam_rear` (`xyz`, `rpy`). |
+| `/sim/ground_truth/pose` | `geometry_msgs/msg/PoseStamped` | `map` | True robot pose, publishesd at 50 Hz. |
+
+
+### Outputs
+
+| Topic | Type | Frame | QoS | Notes |
+|---|---|---|---|---|
+| `/cam_front/detections` and `/cam_rear/detections` | `luna_interfaces/msg/TagDetectionArray` | `cam_front_optical` or `cam_rear_optical` | reliable, depth 10 | One message per camera per cycle (so 2 × 10 Hz with two cameras), each with its camera's optical frame in `header.frame_id`. Publish even when empty. "No tags in view" is information. |
+| `/tags/markers` | `visualization_msgs/msg/MarkerArray` | `map` | reliable, depth 1 | For debugging, a square for every tag in the arena. Highlight the ones currently detected, and a line from the camera to each detected tag. |
+
+Each `TagDetection` in the array:
+
+| Field | Value |
+|---|---|
+| `id` | From the arena layout. |
+| `pose.pose` | Pose of the tag frame in the camera optical frame, plus noise. |
+| `pose.covariance` | 6×6 row-major (x, y, z, roll, pitch, yaw). Plug in the noise variances you used when adding noise to the tag location. Never all zeros. |
+### Frame conventions
+
+| Frame | Axes |
+|---|---|
+| `map` | x along the arena length, y along the width, z up. |
+| `base_link` | x forward, y left, z up. |
+| `cam_front` / `cam_rear` (camera body) | Same as `base_link` convention: x forward out of the lens, y left, z up. Its pose relative to `base_link` is in the geometry YAML. |
+| `cam_front_optical` / `cam_rear_optical` | z forward (out of the lens), x right, y down. This is the standard for all camera and image data. |
+| tag frame | Origin at the tag center. x right, y up, z out of the tag face (toward a viewer looking at it). |
+
+So a tag straight ahead of the camera, facing it, has a pose in the optical frame of roughly `position = (0, 0, d)` with the tag's z axis pointing back toward the camera (−z of the optical frame).
+
+---
+
+## The model
+
+For each camera, each cycle:
+
+1. **Camera pose in `map`** = T(map → base_link, from ground truth) · T(base_link → camera, from the geometry YAML) · T(camera → optical).
+2. **For each tag**, compute the tag's position in the optical frame, `p = (x, y, z)`. The tag is visible only if all of these hold:
+   - in front: `z > 0`;
+   - in range: `min_range_m ≤ |p| ≤ max_range_m`;
+   - in the field of view: `|atan2(x, z)| ≤ hfov/2` and `|atan2(y, z)| ≤ vfov/2`;
+   - facing the camera: the angle between the tag's normal (its z axis) and the direction from the tag to the camera is ≤ `max_view_angle_deg` (a tag seen edge-on, or from behind, can't be detected)
+4. **Noise:** position std `= position_noise_base_m + position_noise_per_m2 · d²` (pose estimates get much worse with distance), rotation std `= rotation_noise_base_rad + rotation_noise_per_rad · view_angle`. Add Gaussian noise to the tag pose in the optical frame, put the same variances in the covariance matrix of the detection message.
+5. **Publish** one `TagDetectionArray` per camera, stamped with the ground-truth pose's time.
+
+Reproduciblity: seed the RNG from a `seed` parameter so that results are reproducible (launch passes the arena seed).
+
+
+### Parameters (`config/sensors/mock_tag_detector.yaml`)
+
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `arena_json` | *(required)* | Path to the arena layout, set by `level1.launch.py`. |
+| `rate_hz` | `10.0` | Publish rate. |
+| `min_range_m` / `max_range_m` | `0.2` / `4.0` | Detection range. |
+| `hfov` /`vfov`| `90.0` / `60.0` | Horizontal and vertical field of view. |
+| `max_view_angle_deg` | `70.0` | The maximum angle between the tag and the camera at which the tag can be viewed. |
+| `position_noise_base_m` | `0.03` | Base standard deviation for position noise. |
+| `position_noise_per_m2` | `0.02` | How much position noise to add for every m^2 of distance from the tag.|
+| `rotation_noise_per_rad` | `0.05` | Base standard deviation for rotation noise. |
+| `rotation_noise_per_rad` | `0.0` | How much rotation noise to add for every radian of rotation between the robot and the z-axis of the tag| 
+| `seed` | `0` | RNG seed. |
+
+---
