@@ -25,7 +25,7 @@ def load_yaml(file_path):
         if key not in config:
             raise KeyError(f"{file_path}: missing required section '{key}'")
 
-    return config['arena'], config['zones'], config['obstacles'], config['placement'], config['start']
+    return config['arena'], config['zones'], config['obstacles'], config['placement'], config['start'], config.get('tags', [])
 
 
 def generate_obstacles(obstacle_specs, zones, arena, placement):
@@ -242,7 +242,7 @@ def write_map(out_dir, name, data, cols, rows, resolution):
     return yaml_path
 
 
-def write_layout_json(out_dir, config_path, seed, arena, zones, placement, obstacles,
+def write_layout_json(out_dir, config_path, seed, arena, zones, placement, obstacles, tags,
                       start_pose, map_files=None):
     """
     Write the generated arena layout as a .json.
@@ -285,6 +285,7 @@ def write_layout_json(out_dir, config_path, seed, arena, zones, placement, obsta
         "keep_out": list(placement.get("keep_out", [])),
         "start_pose": _round_dict(start_pose),
         "obstacles": [_obstacle_entry(o) for o in obstacles],
+        "tags": tags,
         "maps": {k: Path(v).name for k, v in (map_files or {}).items()},
     }
  
@@ -330,7 +331,7 @@ def _round_dict(d):
 
 def generate_map(config, seed, out_dir, resolution):
     random.seed(seed)
-    arena, zones, obstacles, placement, start = load_yaml(config)
+    arena, zones, obstacles, placement, start, tags = load_yaml(config)
 
     obstacles = generate_obstacles(obstacles, zones, arena, placement)
 
@@ -341,7 +342,7 @@ def generate_map(config, seed, out_dir, resolution):
 
     write_map(out_dir, known_name, *generate_occupancy_grid([], arena, resolution), resolution)
     write_map(out_dir, truth_name, *generate_occupancy_grid(obstacles, arena, resolution), resolution)
-    write_layout_json(out_dir, config, seed, arena, zones, placement, obstacles, start_pose, {'known': Path(known_name), 'truth': Path(truth_name)})
+    write_layout_json(out_dir, config, seed, arena, zones, placement, obstacles, tags, start_pose, {'known': Path(known_name), 'truth': Path(truth_name)})
 
 def main():
     parser = argparse.ArgumentParser()
