@@ -69,6 +69,9 @@ class WheelOdometryModel:
         self.left_ticks = 0
         self.right_ticks = 0
 
+        self.pose_covariance = [[0.0]*3 for _ in range(3)]
+        self.twist_covariance = [[0.0]*2 for _ in range(2)]
+
     
 
     def update_covariance(self, dt: float, left_sigma: float, right_sigma: float, distance: float, delta_yaw: float, mid_yaw: float):
@@ -76,9 +79,11 @@ class WheelOdometryModel:
         r = self.radius
         b = self.separation
 
-        # Varaince of each wheel's measured angle increment.
+        ### TWIST COVARIANCE
+
+        # Variance of each wheel's measured angle increment.
         # Includes Gaussian wheel-speed noise and encoder quantization.
-        q_var = self.tick_angle**2 / 6.0
+        q_var = self.tick_angle**2 / 6.0 # a common approximation of the variance for a quantized angle reading is q^2 / 12
 
         var_l = (left_sigma * dt)**2 + q_var
         var_r = (right_sigma * dt)**2 + q_var
@@ -99,6 +104,10 @@ class WheelOdometryModel:
             ]
         ]
 
+
+
+        ### POSE COVARIANCE
+
         # Jacobian w.r.t. previous pose
         F = [
             [1.0, 0.0, -distance * math.sin(mid_yaw)],
@@ -106,7 +115,42 @@ class WheelOdometryModel:
             [0.0, 0.0, 1.0]
         ]
 
-        
+        # Left wheel affects heading negatively; right positively
+        s = math.sin(mid_yaw)
+        c = math.cos(mid_yaw)
+
+        # B maps the left and right encoder angle increments to changes in x, y, and heading.
+        B = [
+            [
+                r/2 * c + distance*s*r / (2*b),
+                r/2 * c - distance*s*r / (2*b)
+            ],
+            [
+                r/2 * s - distance*c*r / (2*b),
+                r/2 * s + distance*c*r / (2*b)
+            ],
+            [
+                -r / b,
+                r / b
+            ]
+        ]
+
+        P = self.pose_covariance
+
+        # First term: F * P * F^T
+        FP = [
+            [sum(F[i][k] * P[k][j] for k in range(3)) for j in range(3)] for i in range(3)
+        ]
+        new_P = [
+            [sum(FP[i][k] * F[j][k] for k in range(3)) for j in range(3)] for i in range(3)
+        ]
+
+        # Second term: B * diag(var_l, var_r) * B^T
+        for i in range(3):
+            for j in range(3):
+                new_P[i][j] += (B[i][0] * var_l * B[j][0]) + (B[i][1] * var_r * B[j][1])
+
+        self.pose_covariance = new_P
 
 
 
@@ -153,7 +197,7 @@ class WheelOdometryModel:
         measured_left = delta_left_ticks * self.tick_angle / dt
         measured_right = delta_right_ticks * self.tick_angle / dt
 
-        # Reconstruct body velocity using nominal geometry
+        # Reconstruct body velocity
         self.linear_velocity = self.radius * (measured_right + measured_left) / 2.0
         self.angular_velocity = self.radius * (measured_right - measured_left) / self.separation
 
@@ -166,6 +210,15 @@ class WheelOdometryModel:
         self.x += distance * math.cos(mid_yaw)
         self.y += distance * math.sin(mid_yaw)
         self.yaw = wrap_angle(self.yaw + delta_yaw)
+
+        self.update_covariance(
+            dt=dt,
+            left_sigma=left_sigma,
+            right_sigma=right_sigma,
+            distance=distance,
+            delta_yaw=delta_yaw,
+            mid_yaw=mid_yaw
+        )
 
         return WheelOdometry(
             x=self.x,
