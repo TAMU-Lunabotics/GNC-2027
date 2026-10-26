@@ -23,6 +23,7 @@ set(PY_EXECUTABLES
   kinematic_base
   oracle_localizer
   sim_clock
+  mock_tag_detector
   # scorer
 )
 
