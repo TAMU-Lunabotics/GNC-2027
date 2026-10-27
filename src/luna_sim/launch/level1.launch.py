@@ -65,6 +65,27 @@ def _setup(context):
              parameters=[sim_time, {'arena_json': str(paths['json'])}]),
     ]
 
+    # Simulated AprilTag cameras
+    if is_true('mock_tag_detector'):
+        actions.append(Node(
+            package='luna_sim',
+            executable='mock_tag_detector',
+            name='mock_tag_detector',
+            output='screen',
+            parameters=[
+                os.path.join(sim_share, 'config', 'sensors',
+                             'mock_tag_detector.yaml'),
+                sim_time,
+                {
+                    'arena_json': str(paths['json']),
+                    'geometry_yaml': os.path.join(
+                        desc_share, 'config', 'robot_geometry.yaml'
+                    ),
+                    'seed': seed,
+                },
+            ],
+        ))
+
     # 6. Localization: the oracle, unless someone is testing a real estimator.
     if is_true('oracle_localization'):
         actions.append(Node(package='luna_sim', executable='oracle_localizer',
@@ -79,7 +100,7 @@ def _setup(context):
         actions.append(Node(
             package='rviz2', executable='rviz2', name='rviz2', output='screen',
             arguments=['-d', rviz_cfg] if os.path.exists(rviz_cfg) else [],
-            additional_env={'QT_ENABLE_HIGHDPI_SCALING': '0'}, 
+            additional_env={'QT_ENABLE_HIGHDPI_SCALING': '0'},
             parameters=[sim_time]))
 
     return actions
@@ -97,6 +118,7 @@ def generate_launch_description():
         DeclareLaunchArgument('rtf', default_value='1.0',
                               description='real-time factor; >1 runs faster than real time'),
         DeclareLaunchArgument('oracle_localization', default_value='true'),
+        DeclareLaunchArgument('mock_tag_detector', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
         OpaqueFunction(function=_setup),
     ])
