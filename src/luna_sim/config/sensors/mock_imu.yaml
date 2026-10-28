@@ -1,0 +1,12 @@
+mock_imu:
+  ros_parameters:
+    rate_hz: 50.0
+    gyro_noise_density: 7.0e-5
+    gyro_bias_init_std: 0.01
+    gyro_bias_rw: 1.0e-4
+    accel_noise_density: 8.0e-4
+    accel_bias_init_std: 0.05
+    accel_bias_rw: 1.0e-3
+    gyro_range_dps: 250.0
+    accel_range_g: 4.0
+    seed: 0
