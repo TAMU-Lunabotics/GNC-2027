@@ -1,7 +1,17 @@
-# path_planner: A* on an inflated occupancy grid.
-# See luna_planning/README.md for what each parameter does.
+# Theta* path planner for the old test rover.
+# Driving footprint: 48.5 in long x 28.5 in wide, including augers.
+# base_link is centered; enclosing radius 0.714424 m, rounded up.
 
 path_planner:
-  robot_radius_m: 0.60          # ASSUMPTION: half the robot diagonal
-  safety_margin_m: 0.10
-  replan_deviation_m: 0.5
+  ros__parameters:
+    robot_radius_m: 0.715
+    safety_margin_m: 0.10
+
+    footprint_mode: hybrid
+    robot_length_m: 1.2319
+    robot_width_m: 0.7239
+    heading_error_deg: 5.0
+    turn_weight: 0.0
+    max_expansions: 20000
+    merge_turnable: true
+    allow_straight_departure: false
