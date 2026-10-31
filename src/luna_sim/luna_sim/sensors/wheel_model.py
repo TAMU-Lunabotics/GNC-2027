@@ -229,3 +229,18 @@ class WheelOdometryModel:
             left_ticks=self.left_ticks,
             right_ticks=self.right_ticks
         )
+
+
+def expand_covariance(matrix, indices, unobserved_variance=1e6):
+    """Expand a planar covariance matrix into ROS 6x6 ordering."""
+    cov = [0.0] * 36
+
+    for i, row_index in enumerate(indices):
+        for j, col_index in enumerate(indices):
+            cov[6 * row_index + col_index] = matrix[i][j]
+
+    for index in range(6):
+        if index not in indices:
+            cov[6 * index + index] = unobserved_variance
+
+    return cov
