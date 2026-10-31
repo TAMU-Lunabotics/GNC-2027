@@ -23,4 +23,14 @@ def generate_launch_description():
                 {'use_sim_time': LaunchConfiguration('use_sim_time')},
             ],
         ),
+        Node(
+            package='luna_guidance',
+            executable='path_planner',
+            name='path_planner',
+            output='screen',
+            parameters=[
+                os.path.join(share, 'config', 'planner.yaml'),
+                {'use_sim_time': LaunchConfiguration('use_sim_time')},
+            ],
+        ),
     ])
