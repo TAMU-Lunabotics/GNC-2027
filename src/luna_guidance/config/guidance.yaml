@@ -1,6 +1,7 @@
 guidance_controller:
   ros__parameters:
     rate_hz: 20.0
+    controller_type: pure_pursuit  # override to regulated_pure_pursuit
 
     lookahead_m: 0.5
     cruise_speed: 0.3
@@ -28,16 +29,17 @@ guidance_controller:
     # NEW PARAMETERS
 
     lookahead_time_s: 1.5
-    min_lookahead_m: 0.15
+    min_lookahead_m: 0.3
     max_lookahead_m: 0.9
 
     regulated_min_radius_m: 0.9
-    proximity_clearemce_m: 0.4
+    robot_radius_m: 0.715
+    proximity_clearance_m: 0.4
     approach_dist_m: 0.6
 
     min_regulated_speed: 0.08
     min_approach_speed: 0.05
     
     collision_check_time_s: 1.0
-    occupied_threshold: 1 # eventually grid values will be in [0, 1] instead of just 0 or 1
+    occupied_threshold: 50 # map occupancy: -1 unknown, 0-100; >=50 blocked
 
