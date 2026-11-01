@@ -20,7 +20,7 @@ source install/setup.bash
 # generate an arena and serve its maps (add rviz:=true to view them)
 ros2 launch luna_sim arena.launch.py seed:=42
 
-# run entire Level 1 sim, as of now that is map, robot, and oracle(perfect) localization
+# run Level 1 with the configured mock sensors and localization
 ros2 launch luna_sim level1.launch.py seed:=42
 
 # or just generate the files
@@ -37,6 +37,7 @@ Omit `seed` to get a random arena. The chosen seed is printed so you can reprodu
 | `config` | `artemis_arena.yaml` | Arena rules file: a path, or a name in `config/arena/`. |
 | `rtf` | `1.0` | Real-time factor. `2.0` = twice as fast as real time. |
 | `oracle_localization` | `true` | `false` when testing a real localization node instead. |
+| `imu_sensor` | `true` | Publish simulated gyro and accelerometer readings. |
 | `rviz` | `true` | Open RViz with `rviz/sim.rviz`. |
 | `out_dir` | `luna_sim/generated` | Where generated arena files go. |
 ---
@@ -67,6 +68,7 @@ luna_description: robot_state_publisher ──► TF base_link → chassis, whee
 | `sim_clock` | Publishes `/clock`; sets sim speed (`rtf`). | Wall time (no `/clock`). |
 | `kinematic_base` | Integrates `/cmd_vel` into the true pose (diff drive, speed limits, 0.5 s command timeout). Starts at the arena's start pose. | The actual robot + `diff_drive_controller`. |
 | `oracle_localizer` | Publishes ground truth as the localization estimate. | The ESKF (`luna_localization`). |
+| `mock_imu` | Produces raw IMU readings with seeded sensor errors. | The physical IMU driver. |
 | `map_server`, `map_server_truth` | Serve the generated maps. | `map_server` with the known arena map. |
 
 ---
@@ -157,3 +159,117 @@ Naming: snake_case, script name = command name = node name.
 - **Nothing generated goes in git.** Promote arenas you want to keep into `worlds/`.
 
 ---
+
+## Mock IMU - WORKING - 2026-27
+
+`mock_imu` supports localization development against a simulated gyroscope
+and accelerometer. The message contract is in
+[INTERFACES.md](../../docs/INTERFACES.md#mock-imu-contract--working--202627).
+
+### Run
+
+The Level 1 launch enables the IMU by default and passes the arena seed,
+geometry YAML, and simulation-time setting:
+
+```bash
+ros2 launch luna_sim level1.launch.py seed:=42 imu_sensor:=true
+```
+
+Use `imu_sensor:=false` to omit it. Inspect the output from another sourced
+terminal with `ros2 topic echo /imu/data_raw --once` or
+`ros2 topic hz /imu/data_raw`.
+
+### Model and configuration
+
+The model derives forward acceleration from successive stamped speeds and
+lateral acceleration from speed times yaw rate. It includes +9.81 m/s²
+specific force on an upright stationary sensor's z axis, then rotates into
+the IMU mounting frame.
+
+The working YAML enables `include_mounting_offset`. Before rotating the
+accelerometer reading into the sensor frame, this adds the rigid-body terms
+`alpha x r + omega x (omega x r)`, where `r` is the mounting position relative
+to the base origin. Yaw acceleration is estimated from successive stamped
+yaw rates. Set the flag to `false` to retain the original task model that
+ignores mounting translation. See the
+[rigid-body acceleration derivation](https://ocw.mit.edu/courses/16-07-dynamics-fall-2009/befffaf20475c1a379c3ac52e91a78cb_MIT16_07F09_Lec21.pdf).
+
+The current geometry places the IMU at `(0, 0, 0.20)` m. A purely vertical
+offset produces no additional acceleration during planar yaw motion. Abrupt
+changes in yaw rate can produce large finite-difference tangential terms
+for horizontal offsets; configured sensor saturation still applies. This
+extension assumes a fixed mounting position and planar motion. It does not
+model rover roll, pitch, or vertical terrain motion.
+
+Each axis has an independently initialized bias, a bias random walk scaled
+by `sqrt(dt)`, and white noise with standard deviation
+`noise_density * sqrt(rate_hz)`. Full-scale clipping follows bias and noise.
+The same seed and accepted input sequence reproduce the model readings.
+Stationary readings include the configured noise and bias.
+
+Sensor settings are defined in
+[config/sensors/mock_imu.yaml](config/sensors/mock_imu.yaml). The defaults
+are development assumptions. Mounting RPY and XYZ come from
+`luna_description/config/robot_geometry.yaml`, under `sensors.imu_link`.
+XYZ is required when mounting-offset effects are enabled; the disabled
+mode also accepts older RPY-only geometry configurations.
+Sensor, mounting, and covariance parameters accept startup overrides and are
+read-only afterward. Edit the configuration and restart the node to change
+them. The ROS-managed `use_sim_time` parameter retains its normal behavior.
+
+Published covariance normally equals the generated white-noise variance.
+`gyro_variance_override` and `accel_variance_override` default to `-1.0`,
+meaning automatic. Positive values explicitly override the reported diagonal
+variance in `(rad/s)^2` and `(m/s²)^2`, respectively, without changing the
+generated readings or random sequence. These values represent assumed
+uncertainty for the consuming filter, not measured noise characteristics.
+
+When disabling white noise, supply a positive variance override for that
+sensor. Otherwise startup fails with a configuration error: ROS interprets
+an all-zero covariance as unknown. The pure model still supports exact
+zero-noise measurements and zero mathematical variance for unit tests.
+
+| File | Responsibility |
+|---|---|
+| `luna_sim/sensors/imu_model.py` | ROS-independent physics, errors, covariance, and saturation. |
+| `luna_sim/sensors/mock_imu.py` | Configuration, input validation, clock handling, and timed publication. |
+| `scripts/mock_imu.py` | Executable entry point. |
+| `test/test_imu_model.py` | 28 deterministic, offset-geometry, and statistical model tests. |
+| `test/test_mock_imu_node.py` | 23 ROS configuration, parameter, covariance, mounting, clock, and topic-delivery tests. |
+
+### Software validation
+
+Ubuntu 22.04/WSL2 with ROS 2 Humble: all 51 functional tests passed,
+along with the package build, CMake/XML checks, and IMU Python lint.
+A headless Level 1 check using seed 42 verified the disabled launch flag,
+then received at least 100 IMU samples with the expected seed,
+simulation-time setting, frame, source timestamps, covariance, and
+stationary gravity.
+
+Offset tests cover centripetal and tangential acceleration, combined base
+motion, sensor-frame rotation, baseline equivalence, rejected-input history,
+configuration validation, and clock-reset behavior. Nonzero offsets in unit
+fixtures are synthetic test cases, not measured rover mounting positions.
+
+Run the registered functional tests after building and sourcing the workspace:
+
+```bash
+ctest --test-dir build/luna_sim \
+  -R '^(test_imu_model|test_mock_imu_node)$' --output-on-failure
+```
+
+### Possible improvements
+
+- **Characterize the physical IMU.** Use stationary recordings to estimate
+  white-noise densities and supported bias random-walk parameters. Use
+  repeated power-on recordings at a fixed orientation to estimate startup
+  bias spread. Record the sensor model, ranges, sample rate, and filter
+  settings with the data. Match the YAML to the tested hardware configuration;
+  retain assumption labels for parameters without adequate measurements.
+- **Support full 3D simulated rover motion.** Add synchronized ground-truth
+  orientation and three-axis motion, then extend gravity projection and
+  fixed-mount acceleration while retaining the planar mode. A Gazebo path
+  needs a physical robot model, collision geometry, and suitable terrain,
+  with its mechanical parameters measured or explicitly assumed. Coordinate
+  the localization/planner interface for tilted poses before using this
+  extension in the full autonomy stack.
