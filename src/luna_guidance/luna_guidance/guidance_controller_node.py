@@ -6,11 +6,14 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
-from geometry_msgs.msg import PointStamped, TwistStamped
+from geometry_msgs.msg import PointStamped, PoseStamped, TwistStamped
+from map_msgs.msg import OccupancyGridUpdate
 from luna_interfaces.msg import GuidanceStatus
-from nav_msgs.msg import Odometry, Path
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
 
 from luna_guidance import pure_pursuit as pp
+from luna_guidance import regulated_pure_pursuit as rpp
+from luna_guidance.obstacle_distance import ObstacleDistance
 
 STATE_TO_MSG = {
     pp.IDLE: GuidanceStatus.IDLE,
@@ -39,13 +42,23 @@ class GuidanceControllerNode(Node):
         self.map_frame = str(self.declare_parameter('map_frame', 'map').value)
         self.base_frame = str(self.declare_parameter('base_frame', 'base_link').value)
 
-        defaults = pp.Params()
+        self.controller_type = str(self.declare_parameter('controller_type', 'pure_pursuit').value)
+        if self.controller_type not in ('pure_pursuit', 'regulated_pure_pursuit'):
+            raise ValueError('controller_type must be pure_pursuit or regulated_pure_pursuit')
+        param_type = (pp.Params if self.controller_type == 'pure_pursuit'
+                      else rpp.RegulatedParams)
+        defaults = param_type()
         values = {}
-        for f in fields(pp.Params):
+        for f in fields(param_type):
             default = getattr(defaults, f.name)
             raw = self.declare_parameter(f.name, default).value
             values[f.name] = type(default)(raw)
-        self.controller = pp.PurePursuit(pp.Params(**values))
+        params = param_type(**values)
+        self.obstacle_distance = ObstacleDistance(
+            occupied_threshold=int(getattr(params, 'occupied_threshold', 50)))
+        # Choose once at startup; timer code works with either controller.
+        self.controller = (pp.PurePursuit(params) if self.controller_type == 'pure_pursuit'
+                           else rpp.RegulatedPurePursuit(params, self.obstacle_distance))
 
         self.pose = None
         self.pose_time = None
@@ -61,14 +74,18 @@ class GuidanceControllerNode(Node):
 
         self.create_subscription(Path, '/guidance/path', self.on_path, latched)
         self.create_subscription(Odometry, '/odometry/filtered', self.on_odom, odom_qos)
+        self.create_subscription(OccupancyGrid, '/map', self.on_map, latched)
+        self.create_subscription(OccupancyGridUpdate, '/map_updates',
+                                 self.on_map_update, odom_qos)
         self.cmd_pub = self.create_publisher(TwistStamped, '/cmd_vel', cmd_qos)
         self.status_pub = self.create_publisher(GuidanceStatus, '/guidance/status', latched)
         self.lookahead_pub = self.create_publisher(PointStamped, '/guidance/lookahead', debug_qos)
+        self.arc_pub = self.create_publisher(Path, '/guidance/collision_arc', debug_qos)
 
         self.create_timer(1.0 / self.rate_hz, self.on_timer)
         self.publish_status()
         self.get_logger().info(f'guidance controller up: {self.rate_hz:.0f} Hz, '
-                               f'lookahead {self.controller.p.lookahead_m} m, '
+                               f'mode {self.controller_type}, '
                                f'cruise {self.controller.p.cruise_speed} m/s')
 
     def on_path(self, msg):
@@ -85,6 +102,45 @@ class GuidanceControllerNode(Node):
         self.controller.set_path(points, goal_yaw)
         self.get_logger().info(f'new path: {len(points)} points'
                                if points else 'empty path: stopping')
+
+    def on_map(self, msg):
+        if msg.header.frame_id not in ('', self.map_frame):
+            self.get_logger().error('map frame mismatch; ignoring map')
+            return
+        origin = msg.info.origin
+        try:
+            self.obstacle_distance.set_map(
+                msg.info.width, msg.info.height, msg.info.resolution,
+                origin.position.x, origin.position.y,
+                yaw_from_quaternion(origin.orientation), msg.data)
+        except ValueError as exc:
+            self.obstacle_distance.ready = False
+            self.get_logger().error(f'invalid occupancy grid: {exc}')
+
+    def on_map_update(self, msg):
+        if msg.header.frame_id not in ('', self.map_frame):
+            self.get_logger().error('map update frame mismatch; ignoring update')
+            return
+        try:
+            self.obstacle_distance.apply_update(msg.x, msg.y, msg.width,
+                                                msg.height, msg.data)
+        except ValueError as exc:
+            self.obstacle_distance.ready = False
+            self.get_logger().error(f'invalid map update: {exc}')
+
+    def publish_collision_arc(self, now):
+        arc = Path()
+        arc.header.stamp = now.to_msg()
+        arc.header.frame_id = self.map_frame
+        for x, y, yaw in getattr(self.controller, 'collision_arc', []):
+            pose = PoseStamped()
+            pose.header = arc.header
+            pose.pose.position.x = float(x)
+            pose.pose.position.y = float(y)
+            pose.pose.orientation.z = math.sin(yaw / 2.0)
+            pose.pose.orientation.w = math.cos(yaw / 2.0)
+            arc.poses.append(pose)
+        self.arc_pub.publish(arc)
 
     def on_odom(self, msg):
         if msg.header.frame_id not in ('', self.map_frame):
@@ -118,6 +174,7 @@ class GuidanceControllerNode(Node):
             v, w = controller.get_control(x, y, yaw, dt)
 
         self.publish_cmd(v, w, now)
+        self.publish_collision_arc(now)
 
         if controller.lookahead_point is not None and controller.state == pp.FOLLOWING:
             point = PointStamped()

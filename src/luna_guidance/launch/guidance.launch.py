@@ -11,6 +11,7 @@ def generate_launch_description():
     share = get_package_share_directory('luna_guidance')
 
     return LaunchDescription([
+        DeclareLaunchArgument('controller_type', default_value='pure_pursuit'),
         DeclareLaunchArgument('use_sim_time', default_value='false',
                               description='true when running with the sim clock'),
         Node(
@@ -20,7 +21,8 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 os.path.join(share, 'config', 'guidance.yaml'),
-                {'use_sim_time': LaunchConfiguration('use_sim_time')},
+                {'use_sim_time': LaunchConfiguration('use_sim_time'),
+                 'controller_type': LaunchConfiguration('controller_type')},
             ],
         ),
         Node(
