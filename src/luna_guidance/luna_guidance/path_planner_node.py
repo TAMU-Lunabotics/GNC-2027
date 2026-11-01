@@ -136,7 +136,7 @@ class PathPlannerNode(Node):
         self.last_map = None
 
         self.create_subscription(
-            OccupancyGrid, '/map', self.on_map, self.latched_qos
+            OccupancyGrid, '/map_truth', self.on_map, self.latched_qos
         )
         self.create_subscription(
             Odometry, '/odometry/filtered', self.on_odom, 10

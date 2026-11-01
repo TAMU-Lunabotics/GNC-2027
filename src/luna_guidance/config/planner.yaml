@@ -4,14 +4,14 @@
 
 path_planner:
   ros__parameters:
-    robot_radius_m: 0.715
-    safety_margin_m: 0.10
+    robot_radius_m: 0.2
+    safety_margin_m: 0.0
 
-    footprint_mode: hybrid
+    footprint_mode: hyrbid
     robot_length_m: 1.2319
     robot_width_m: 0.7239
-    heading_error_deg: 5.0
+    heading_error_deg: 0.0
     turn_weight: 0.0
     max_expansions: 20000
     merge_turnable: true
-    allow_straight_departure: false
+    allow_straight_departure: true
