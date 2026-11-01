@@ -6,8 +6,10 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import Int32MultiArray
 from geometry_msgs.msg import TwistStamped
 
-WHEEL_RADIUS = 1.0
-TICKS_PER_REV = 1.0
+WHEEL_RADIUS = 0.048
+TICKS_PER_REV = 28 * 19.2 # 28 ppr encoder, 19.2:1 gearbox in the motor, may be missing extra external reduction
+MAX_SPEED = 0.1 # m/s
+MIN_SPEED = 0.25 # m/s
 
 class DriveController(Node):
     def __init__(self):
@@ -20,8 +22,8 @@ class DriveController(Node):
         self.odom = None
 
         # Subscirbers
-        self.odom_sub = self.create_subscription(Odometry, "/wheel/odometry", 10, self.odom_cb)
-        self.cmd_sub = self.create_subscription(TwistStamped, "/cmd_vel", 10, self.drive)
+        # self.odom_sub = self.create_subscription(Odometry, "/wheel/odometry", 10, self.odom_cb)
+        self.cmd_sub = self.create_subscription(TwistStamped, "/cmd_vel", 10, self.control_loop)
 
         # Publishers
         self.drive_pub = self.create_publisher(Int32MultiArray, "/auto_drive", 10)
@@ -32,21 +34,16 @@ class DriveController(Node):
     def mps_to_qpps(v):
         return int(v / (2 * math.pi * WHEEL_RADIUS) * TICKS_PER_REV)
 
-
-    def drive(self, msg):
+    def control_loop(self, msg):
         v_left = self.mps_to_qpps(msg.twist.linear.x - msg.twist.angular.z*self.track_width / 2)
         v_right = self.mps_to_qpps(msg.twist.linear.x + msg.twist.angular.z*self.track_width / 2)
+
+        v_left = max(MIN_SPEED, min(self.mps_to_qpps(MIN_SPEED), self.mps_to_qpps(MAX_SPEED, v_left)))
+        v_right = max(MIN_SPEED, min(self.mps_to_qpps(MIN_SPEED), self.mps_to_qpps(MAX_SPEED, v_right)))
 
         vel_msg = Int32MultiArray()
         vel_msg.data = [v_left, v_right]
 
-        self.drive_pub()
+        self.get_logger().info(f'QPPS: left: {v_left}, right: {v_right}')
 
-
-
-
-    def odom_cb(self, msg):
-        self.odom = msg
-
-    def control_loop():
-        
+        self.drive_pub.publish(vel_msg)
