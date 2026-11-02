@@ -1,7 +1,7 @@
-mock_excavation:
+mock_dump:
   ros__parameters:
-    duration_s: 20.0
-    jitter_s: 3.0
+    duration_s: 10.0
+    jitter_s: 2.0
     feedback_hz: 2.0
     failure_probability: 0.0
     seed: 0

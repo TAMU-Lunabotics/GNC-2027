@@ -86,6 +86,20 @@ def _setup(context):
             ],
         ))
 
+    for name in ('mock_excavation', 'mock_dump'):
+        if is_true(name):
+            actions.append(Node(
+                package='luna_sim',
+                executable=name,
+                name=name,
+                output='screen',
+                parameters=[
+                    os.path.join(sim_share, 'config', 'actuators', f'{name}.yaml'),
+                    sim_time,
+                    {'seed': seed},
+                ],
+            ))
+
     # 6. Localization: the oracle, unless someone is testing a real estimator.
     if is_true('oracle_localization'):
         actions.append(Node(package='luna_sim', executable='oracle_localizer',
@@ -119,6 +133,8 @@ def generate_launch_description():
                               description='real-time factor; >1 runs faster than real time'),
         DeclareLaunchArgument('oracle_localization', default_value='true'),
         DeclareLaunchArgument('mock_tag_detector', default_value='true'),
+        DeclareLaunchArgument('mock_excavation', default_value='true'),
+        DeclareLaunchArgument('mock_dump', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
         OpaqueFunction(function=_setup),
     ])
