@@ -99,6 +99,24 @@ def _setup(context):
                     {'seed': seed},
                 ],
             ))
+    # Simulated IMU
+    if is_true('imu_sensor'):
+        actions.append(Node(
+            package='luna_sim',
+            executable='mock_imu',
+            name='mock_imu',
+            output='screen',
+            parameters=[
+                os.path.join(sim_share, 'config', 'sensors', 'mock_imu.yaml'),
+                sim_time,
+                {
+                    'geometry_yaml': os.path.join(
+                        desc_share, 'config', 'robot_geometry.yaml'
+                    ),
+                    'seed': seed,
+                },
+            ],
+        ))
 
     # 6. Localization: the oracle, unless someone is testing a real estimator.
     if is_true('oracle_localization'):
@@ -135,6 +153,7 @@ def generate_launch_description():
         DeclareLaunchArgument('mock_tag_detector', default_value='true'),
         DeclareLaunchArgument('mock_excavation', default_value='true'),
         DeclareLaunchArgument('mock_dump', default_value='true'),
+        DeclareLaunchArgument('imu_sensor', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
         OpaqueFunction(function=_setup),
     ])

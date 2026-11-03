@@ -116,3 +116,64 @@ measured performance, and validation scope.
 Historical /path and /plan references in the task specification and
 PlannerStatus comments are not the implemented output topic:
 the implemented topic is /guidance/path. No message-schema change is made.
+
+## Mock IMU contract — WORKING — 2026–27
+
+This simulation sensor supplies raw readings for localization development.
+
+| Direction | Topic | Type | Frame | QoS |
+|---|---|---|---|---|
+| Simulated base -> mock IMU | `/sim/ground_truth/twist` | `geometry_msgs/msg/TwistStamped` | `base_link` | Reliable, volatile, depth 10 |
+| Mock IMU -> localization | `/imu/data_raw` | `sensor_msgs/msg/Imu` | `imu_link` | Reliable, volatile, depth 10 |
+
+Input fields are forward speed `linear.x` in m/s and yaw rate `angular.z`
+in rad/s. The input source runs at 50 Hz. The output timer uses the ROS node
+clock at `rate_hz`, default 50 Hz and constrained to `0 < rate_hz <= 50`.
+When input is slower or interrupted, output rate can fall below this setting.
+
+Output gyro units are rad/s and accelerometer units are m/s². An upright,
+stationary ideal sensor reports +9.81 on accelerometer z. Sensor values
+include the configured bias/noise and are clipped at the configured ranges.
+The node publishes no TF; the robot description owns `base_link -> imu_link`.
+
+`include_mounting_offset` is a startup-only switch, enabled in the supplied
+YAML. It adds `alpha x r + omega x (omega x r)` to base acceleration before
+the sensor-frame rotation, using `sensors.imu_link.xyz` in meters. Both
+angular velocity and angular acceleration are along the base z axis; angular
+acceleration comes from successive accepted yaw rates and source timestamps.
+A vertical-only offset has no effect for this planar motion. Abrupt yaw-rate
+changes can create large tangential terms, subject to the configured sensor
+range. Turning the switch off retains the original translation-free model.
+This extension does not supply roll, pitch, or vertical rover dynamics.
+
+The first valid input establishes the acceleration baseline and produces
+no measurement. Each later accepted input advances the model using its
+header timestamp. The timer publishes the latest new reading once, copying
+that source timestamp exactly; it does not repeatedly publish an old reading.
+Intermediate readings may be skipped if several arrive between timer ticks.
+
+Incorrect frames, nonfinite motion, and invalid timestamp fields are rejected
+and clear any pending output. Duplicate or older timestamps are ignored
+without advancing model state. A backward ROS-clock jump or clock-source
+change resets the model, pending output, and seeded random stream.
+
+Orientation is unavailable: all quaternion components are zero and
+`orientation_covariance[0] = -1`. Consumers must ignore orientation.
+Gyro and accelerometer covariances are row-major 3x3 diagonal matrices
+containing white-noise variance, `noise_density² * rate_hz`, excluding bias.
+`gyro_variance_override` and `accel_variance_override` default to `-1.0`
+(automatic); a positive override supplies an explicit assumed diagonal
+variance in `(rad/s)^2` or `(m/s²)^2`. Overrides change covariance metadata
+only, leaving generated readings and the seeded random sequence unchanged.
+Disabling white noise requires a positive override for that sensor; otherwise
+startup fails rather than publishing an all-zero covariance that ROS would
+interpret as unknown. The ROS-independent model retains zero mathematical
+variance for ideal test readings. No arbitrary covariance floor is inserted.
+
+Sensor settings, covariance overrides, and `geometry_yaml` are read-only
+after initialization. YAML and command-line startup overrides remain
+supported; restart the node to change these settings. `use_sim_time` keeps
+its normal ROS-managed dynamic behavior.
+
+See the [simulation README](../src/luna_sim/READEME.md#mock-imu---working---2026-27)
+for configuration, launch usage, model assumptions, and software validation.

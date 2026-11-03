@@ -1,5 +1,5 @@
 mock_imu:
-  ros_parameters:
+  ros__parameters:
     rate_hz: 50.0
     gyro_noise_density: 7.0e-5
     gyro_bias_init_std: 0.01
@@ -10,3 +10,11 @@ mock_imu:
     gyro_range_dps: 250.0
     accel_range_g: 4.0
     seed: 0
+    # Planar alpha x r and omega x (omega x r) acceleration at the IMU.
+    # False retains the original model that ignores mounting translation.
+    include_mounting_offset: true
+    # -1.0 reports generated white-noise variance. A positive override changes
+    # reported uncertainty only; it does not add noise to the measurements.
+    # Zero white noise requires an explicit positive override.
+    gyro_variance_override: -1.0   # (rad/s)^2
+    accel_variance_override: -1.0  # (m/s^2)^2
