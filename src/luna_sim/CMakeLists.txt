@@ -24,6 +24,10 @@ set(PY_EXECUTABLES
   oracle_localizer
   sim_clock
   mock_wheel_odometry
+  mock_tag_detector
+  mock_excavation
+  mock_dump
+  mock_imu
   # scorer
 )
 
@@ -37,6 +41,13 @@ install(DIRECTORY launch config rviz worlds
   DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  foreach(test_name test_imu_model test_mock_imu_node)
+    ament_add_pytest_test(${test_name} test/${test_name}.py
+      APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+      TIMEOUT 60
+    )
+  endforeach()
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
   # comment the line when a copyright and license is added to all source files

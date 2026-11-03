@@ -79,6 +79,19 @@ def _setup(context):
                 ),
                 sim_time,
                 {
+    # Simulated AprilTag cameras
+    if is_true('mock_tag_detector'):
+        actions.append(Node(
+            package='luna_sim',
+            executable='mock_tag_detector',
+            name='mock_tag_detector',
+            output='screen',
+            parameters=[
+                os.path.join(sim_share, 'config', 'sensors',
+                             'mock_tag_detector.yaml'),
+                sim_time,
+                {
+                    'arena_json': str(paths['json']),
                     'geometry_yaml': os.path.join(
                         desc_share, 'config', 'robot_geometry.yaml'
                     ),
@@ -88,6 +101,39 @@ def _setup(context):
         ))
 
     # 7. Localization: the oracle, unless someone is testing a real estimator.
+    for name in ('mock_excavation', 'mock_dump'):
+        if is_true(name):
+            actions.append(Node(
+                package='luna_sim',
+                executable=name,
+                name=name,
+                output='screen',
+                parameters=[
+                    os.path.join(sim_share, 'config', 'actuators', f'{name}.yaml'),
+                    sim_time,
+                    {'seed': seed},
+                ],
+            ))
+    # Simulated IMU
+    if is_true('imu_sensor'):
+        actions.append(Node(
+            package='luna_sim',
+            executable='mock_imu',
+            name='mock_imu',
+            output='screen',
+            parameters=[
+                os.path.join(sim_share, 'config', 'sensors', 'mock_imu.yaml'),
+                sim_time,
+                {
+                    'geometry_yaml': os.path.join(
+                        desc_share, 'config', 'robot_geometry.yaml'
+                    ),
+                    'seed': seed,
+                },
+            ],
+        ))
+
+    # 6. Localization: the oracle, unless someone is testing a real estimator.
     if is_true('oracle_localization'):
         actions.append(Node(package='luna_sim', executable='oracle_localizer',
                             name='oracle_localizer', output='screen', parameters=[sim_time]))
@@ -101,7 +147,7 @@ def _setup(context):
         actions.append(Node(
             package='rviz2', executable='rviz2', name='rviz2', output='screen',
             arguments=['-d', rviz_cfg] if os.path.exists(rviz_cfg) else [],
-            additional_env={'QT_ENABLE_HIGHDPI_SCALING': '0'}, 
+            additional_env={'QT_ENABLE_HIGHDPI_SCALING': '0'},
             parameters=[sim_time]))
 
     return actions
@@ -124,6 +170,10 @@ def generate_launch_description():
             default_value='true',
             description='Enable simulated wheel encoder odometry'
         ),
+        DeclareLaunchArgument('mock_tag_detector', default_value='true'),
+        DeclareLaunchArgument('mock_excavation', default_value='true'),
+        DeclareLaunchArgument('mock_dump', default_value='true'),
+        DeclareLaunchArgument('imu_sensor', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
         OpaqueFunction(function=_setup),
     ])

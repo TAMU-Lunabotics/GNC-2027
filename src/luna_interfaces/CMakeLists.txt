@@ -19,7 +19,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/LocalizationStatus.msg"
   "msg/TagDetection.msg"
   "msg/TagDetectionArray.msg"
-  DEPENDENCIES std_msgs geometry_msgs
+  "action/Dig.action"
+  "action/Dump.action"
+  DEPENDENCIES std_msgs geometry_msgs action_msgs
 )
 
 if(BUILD_TESTING)
