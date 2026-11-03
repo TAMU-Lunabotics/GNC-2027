@@ -37,6 +37,7 @@ Omit `seed` to get a random arena. The chosen seed is printed so you can reprodu
 | `config` | `artemis_arena.yaml` | Arena rules file: a path, or a name in `config/arena/`. |
 | `rtf` | `1.0` | Real-time factor. `2.0` = twice as fast as real time. |
 | `oracle_localization` | `true` | `false` when testing a real localization node instead. |
+| `mock_excavation`, `mock_dump` | `true` | Run the dig and dump action servers. |
 | `imu_sensor` | `true` | Publish simulated gyro and accelerometer readings. |
 | `rviz` | `true` | Open RViz with `rviz/sim.rviz`. |
 | `out_dir` | `luna_sim/generated` | Where generated arena files go. |
@@ -70,6 +71,7 @@ luna_description: robot_state_publisher ──► TF base_link → chassis, whee
 | `oracle_localizer` | Publishes ground truth as the localization estimate. | The ESKF (`luna_localization`). |
 | `mock_imu` | Produces raw IMU readings with seeded sensor errors. | The physical IMU driver. |
 | `map_server`, `map_server_truth` | Serve the generated maps. | `map_server` with the known arena map. |
+| `mock_excavation`, `mock_dump` | `/dig` and `/dump` action servers. Wait `duration_s` plus random jitter (sim time), send `elapsed_s` feedback, then succeed. Can be set to fail randomly, time out, or be canceled. | The real excavation and dump controllers (same action names and types). |
 
 ---
 
@@ -159,6 +161,14 @@ Naming: snake_case, script name = command name = node name.
 - **Nothing generated goes in git.** Promote arenas you want to keep into `worlds/`.
 
 ---
+### Trying the mock actuators
+
+```bash
+ros2 action send_goal /dig luna_interfaces/action/Dig "{max_duration_s: 0.0}" --feedback
+ros2 action send_goal /dump luna_interfaces/action/Dump "{max_duration_s: 5.0}" --feedback   # times out
+```
+
+Settings are in `config/actuators/`. Unit tests (no ROS needed): `cd src/luna_sim && python3 -m pytest test -q`.
 
 ## Mock IMU - WORKING - 2026-27
 

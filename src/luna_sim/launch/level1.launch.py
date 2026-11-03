@@ -86,6 +86,19 @@ def _setup(context):
             ],
         ))
 
+    for name in ('mock_excavation', 'mock_dump'):
+        if is_true(name):
+            actions.append(Node(
+                package='luna_sim',
+                executable=name,
+                name=name,
+                output='screen',
+                parameters=[
+                    os.path.join(sim_share, 'config', 'actuators', f'{name}.yaml'),
+                    sim_time,
+                    {'seed': seed},
+                ],
+            ))
     # Simulated IMU
     if is_true('imu_sensor'):
         actions.append(Node(
@@ -138,6 +151,8 @@ def generate_launch_description():
                               description='real-time factor; >1 runs faster than real time'),
         DeclareLaunchArgument('oracle_localization', default_value='true'),
         DeclareLaunchArgument('mock_tag_detector', default_value='true'),
+        DeclareLaunchArgument('mock_excavation', default_value='true'),
+        DeclareLaunchArgument('mock_dump', default_value='true'),
         DeclareLaunchArgument('imu_sensor', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
         OpaqueFunction(function=_setup),

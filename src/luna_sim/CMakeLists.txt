@@ -24,6 +24,8 @@ set(PY_EXECUTABLES
   oracle_localizer
   sim_clock
   mock_tag_detector
+  mock_excavation
+  mock_dump
   mock_imu
   # scorer
 )
