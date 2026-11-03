@@ -1,10 +1,9 @@
-# All values are ASSUMPTIONS until we measure the real drivetrain.
-
 mock_wheel_odometry:
-  rate_hz: 50.0
-
-  pose_noise_std_m: 0.01
-  yaw_noise_std_rad: 0.005
-
-  drift_per_m: 0.02
-  : 0.02
+  ros__parameters:
+    rate_hz: 50.0
+    ticks_per_rev: 4096
+    # Wheel angular-speed Gaussian noise: sigma = noise_std_rad_s + noise_per_rad_s * abs(wheel_speed).
+    # First-pass assumptions; calibrate from real encoders later.
+    noise_std_rad_s: 0.01
+    noise_per_rad_s: 0.01
+    # geometry_yaml and seed are provided by level1.launch.py.

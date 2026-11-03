@@ -65,6 +65,20 @@ def _setup(context):
              parameters=[sim_time, {'arena_json': str(paths['json'])}]),
     ]
 
+    # 6. Mock wheel encoders and odometry
+    if is_true('mock_wheel_odometry'):
+        actions.append(Node(
+            package='luna_sim',
+            executable='mock_wheel_odometry',
+            name='mock_wheel_odometry',
+            output='screen',
+            parameters=[
+                os.path.join(
+                    sim_share, 'config', 'sensors',
+                    'mock_wheel_odometry.yaml'
+                ),
+                sim_time,
+                {
     # Simulated AprilTag cameras
     if is_true('mock_tag_detector'):
         actions.append(Node(
@@ -86,6 +100,7 @@ def _setup(context):
             ],
         ))
 
+    # 7. Localization: the oracle, unless someone is testing a real estimator.
     for name in ('mock_excavation', 'mock_dump'):
         if is_true(name):
             actions.append(Node(
@@ -126,7 +141,7 @@ def _setup(context):
         actions.append(LogInfo(msg='[level1] oracle_localization:=false -> nothing publishes '
                                    'map->odom->base_link until your localization runs'))
 
-    # 7. RViz with the saved layout.
+    # 8. RViz with the saved layout.
     if is_true('rviz'):
         rviz_cfg = os.path.join(sim_share, 'rviz', 'sim.rviz')
         actions.append(Node(
@@ -150,6 +165,11 @@ def generate_launch_description():
         DeclareLaunchArgument('rtf', default_value='1.0',
                               description='real-time factor; >1 runs faster than real time'),
         DeclareLaunchArgument('oracle_localization', default_value='true'),
+        DeclareLaunchArgument(
+            'mock_wheel_odometry',
+            default_value='true',
+            description='Enable simulated wheel encoder odometry'
+        ),
         DeclareLaunchArgument('mock_tag_detector', default_value='true'),
         DeclareLaunchArgument('mock_excavation', default_value='true'),
         DeclareLaunchArgument('mock_dump', default_value='true'),
