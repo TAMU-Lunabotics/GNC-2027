@@ -14,4 +14,4 @@ path_planner:
     turn_weight: 0.0
     max_expansions: 20000
     merge_turnable: true
-    allow_straight_departure: false
+    allow_straight_departure: true

@@ -64,21 +64,28 @@ def _setup(context):
              output='screen',
              parameters=[sim_time, {'arena_json': str(paths['json'])}]),
     ]
-
     # 6. Mock wheel encoders and odometry
     if is_true('mock_wheel_odometry'):
-        actions.append(Node(
-            package='luna_sim',
-            executable='mock_wheel_odometry',
-            name='mock_wheel_odometry',
-            output='screen',
-            parameters=[
-                os.path.join(
-                    sim_share, 'config', 'sensors',
-                    'mock_wheel_odometry.yaml'
-                ),
-                sim_time,
-                {
+            actions.append(Node(
+                package='luna_sim',
+                executable='mock_wheel_odometry',
+                name='mock_wheel_odometry',
+                output='screen',
+                parameters=[
+                    os.path.join(
+                        sim_share, 'config', 'sensors',
+                        'mock_wheel_odometry.yaml'
+                    ),
+                    sim_time,
+                    {
+                        'geometry_yaml': os.path.join(
+                            desc_share, 'config', 'robot_geometry.yaml'
+                        ),
+                        'seed': seed,
+                    },
+                ],
+        ))
+
     # Simulated AprilTag cameras
     if is_true('mock_tag_detector'):
         actions.append(Node(
