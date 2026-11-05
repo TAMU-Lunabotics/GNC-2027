@@ -1,13 +1,20 @@
 # All values are ASSUMPTIONS until the real sensor is characterized.
-
 mock_obstacle_detector:
-  rate_hz: 10.0
+  ros__parameters:
+    # arena_json and seed are supplied by level1.launch.py; no defaults here on purpose.
+    rate_hz: 10.0
 
-  # Visibility (measured from the sensor, to the obstacle's edge)
-  min_range_m: 0.3
-  max_range_m: 3.0
-  fov_deg: 90
+    # Visibility (measured from the sensor, to the obstacle's edge)
+    min_range_m: 0.3
+    max_range_m: 3.0
+    fov_deg: 360.0                 # centered on robot heading; spec table said 360.0 -- CONFIRM
 
-  # Noise at zero range(scaled up with distance by the node)
-  position_noise_std_m: 0.03
-  radius_noise_std_m: 0.02
+    # Noise at zero range (scaled up with distance by the node)
+    position_noise_std_m: 0.03
+    radius_noise_std_m: 0.02
+
+    # Added: needed by the node, kept out of code per the conventions.
+    sensor_link: lidar_link       # key under sensors: in robot_geometry.yaml [2]
+    robot_geometry_yaml: ''       # '' = resolve from the luna_description share dir
+    occupied_value: 100           # ROS convention: 0 free, 100 occupied, -1 unknown
+    seed: 0                       # launch passes the arena seed
