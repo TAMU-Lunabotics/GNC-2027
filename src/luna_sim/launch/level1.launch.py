@@ -65,6 +65,81 @@ def _setup(context):
              output='screen',
              parameters=[sim_time, {'arena_json': str(paths['json'])}]),
     ]
+    # 6. Mock wheel encoders and odometry
+    if is_true('mock_wheel_odometry'):
+            actions.append(Node(
+                package='luna_sim',
+                executable='mock_wheel_odometry',
+                name='mock_wheel_odometry',
+                output='screen',
+                parameters=[
+                    os.path.join(
+                        sim_share, 'config', 'sensors',
+                        'mock_wheel_odometry.yaml'
+                    ),
+                    sim_time,
+                    {
+                        'geometry_yaml': os.path.join(
+                            desc_share, 'config', 'robot_geometry.yaml'
+                        ),
+                        'seed': seed,
+                    },
+                ],
+        ))
+
+    # Simulated AprilTag cameras
+    if is_true('mock_tag_detector'):
+        actions.append(Node(
+            package='luna_sim',
+            executable='mock_tag_detector',
+            name='mock_tag_detector',
+            output='screen',
+            parameters=[
+                os.path.join(sim_share, 'config', 'sensors',
+                             'mock_tag_detector.yaml'),
+                sim_time,
+                {
+                    'arena_json': str(paths['json']),
+                    'geometry_yaml': os.path.join(
+                        desc_share, 'config', 'robot_geometry.yaml'
+                    ),
+                    'seed': seed,
+                },
+            ],
+        ))
+
+    # 7. Localization: the oracle, unless someone is testing a real estimator.
+    for name in ('mock_excavation', 'mock_dump'):
+        if is_true(name):
+            actions.append(Node(
+                package='luna_sim',
+                executable=name,
+                name=name,
+                output='screen',
+                parameters=[
+                    os.path.join(sim_share, 'config', 'actuators', f'{name}.yaml'),
+                    sim_time,
+                    {'seed': seed},
+                ],
+            ))
+    # Simulated IMU
+    if is_true('imu_sensor'):
+        actions.append(Node(
+            package='luna_sim',
+            executable='mock_imu',
+            name='mock_imu',
+            output='screen',
+            parameters=[
+                os.path.join(sim_share, 'config', 'sensors', 'mock_imu.yaml'),
+                sim_time,
+                {
+                    'geometry_yaml': os.path.join(
+                        desc_share, 'config', 'robot_geometry.yaml'
+                    ),
+                    'seed': seed,
+                },
+            ],
+        ))
 
     # 6. Localization: the oracle, unless someone is testing a real estimator.
     if is_true('oracle_localization'):
@@ -74,7 +149,7 @@ def _setup(context):
         actions.append(LogInfo(msg='[level1] oracle_localization:=false -> nothing publishes '
                                    'map->odom->base_link until your localization runs'))
 
-    # 7. RViz with the saved layout.
+    # 8. RViz with the saved layout.
     if is_true('rviz'):
         rviz_cfg = os.path.join(sim_share, 'rviz', 'sim.rviz')
         actions.append(Node(
@@ -114,6 +189,15 @@ def generate_launch_description():
         DeclareLaunchArgument('oracle_localization', default_value='true'),
         DeclareLaunchArgument('obstacle_sensor', default_value='true',
                               description='mock lidar obstacle detection -> /map_updates'),
+        DeclareLaunchArgument(
+            'mock_wheel_odometry',
+            default_value='true',
+            description='Enable simulated wheel encoder odometry'
+        ),
+        DeclareLaunchArgument('mock_tag_detector', default_value='true'),
+        DeclareLaunchArgument('mock_excavation', default_value='true'),
+        DeclareLaunchArgument('mock_dump', default_value='true'),
+        DeclareLaunchArgument('imu_sensor', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
         OpaqueFunction(function=_setup),
     ])

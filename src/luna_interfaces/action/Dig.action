@@ -1,0 +1,9 @@
+# Dig.action: run one excavation cycle at the robot's current location.
+# Goal
+float32 max_duration_s        # server aborts with failure_reason "timeout" past this; 0 = no limit
+---
+# Result
+bool success
+---
+# Feedback
+float32 elapsed_s
