@@ -178,12 +178,13 @@ class MockObstacleDetector(Node):
         self.grid = None            # persistent accumulated grid, seeded from /map
         self.meta = None            # (resolution, width, height, origin_x, origin_y)
         self.last_warn_t = None
+        self.estimates = {} # list of obstacles that have been detected
 
         map_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL,
                              history=HistoryPolicy.KEEP_LAST)
         update_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
-                                durability=DurabilityPolicy.VOLATILE,
+                                durability=DurabilityPolicy.TRANSIENT_LOCAL,
                                 history=HistoryPolicy.KEEP_LAST)
 
         self.pub = self.create_publisher(OccupancyGridUpdate, "/map_updates", update_qos)
@@ -206,6 +207,8 @@ class MockObstacleDetector(Node):
         if self.meta is None or meta != self.meta:
             self.grid = list(msg.data)
             self.meta = meta
+            for estimate in self.estimates.values():
+                self._mark(estimate)
             self.get_logger().info(
                 f"/map seeded: {info.width}x{info.height} at {info.resolution:.3f} m/cell, "
                 f"origin ({meta[3]:.2f}, {meta[4]:.2f})")
@@ -213,6 +216,18 @@ class MockObstacleDetector(Node):
             for i, v in enumerate(msg.data):
                 if self.grid[i] != self.occupied:
                     self.grid[i] = v
+
+    def _mark(self, estimate):
+        """Mark an estimated obstacle's cells as occupied and return the cells that changed."""
+        resolution, width, height, origin_x, origin_y = self.meta
+        changed = []
+        for col, row in rasterize_circle(*estimate, origin_x, origin_y,
+                                         resolution, width, height):
+            i = row * width + col
+            if self.grid[i] != self.occupied:
+                self.grid[i] = self.occupied
+                changed.append((col, row))
+        return changed
 
     def _on_pose(self, msg) -> None:
         pose = msg.pose
@@ -242,21 +257,18 @@ class MockObstacleDetector(Node):
         sx, sy = sensor_origin(x, y, yaw, self.mount_x, self.mount_y)
 
         new_cells = []
-        for ox, oy, radius in self.obstacles:
+        for idx, (ox, oy, radius) in enumerate(self.obstacles):
+            if idx in self.estimates:
+                continue  # already detected; its estimate is fixed
             if not is_visible(sx, sy, yaw, ox, oy, radius,
                               self.min_range_m, self.max_range_m, self.fov_deg):
                 continue
 
             center_dist = math.hypot(ox - sx, oy - sy)
-            nx, ny, nr = apply_noise(self.rng, ox, oy, radius, center_dist,
-                                     self.max_range_m, self.pos_std, self.rad_std)
-
-            for col, row in rasterize_circle(nx, ny, nr, origin_x, origin_y,
-                                             resolution, width, height):
-                i = row * width + col
-                if self.grid[i] != self.occupied:
-                    self.grid[i] = self.occupied
-                    new_cells.append((col, row))
+            estimate = apply_noise(self.rng, ox, oy, radius, center_dist,
+                                   self.max_range_m, self.pos_std, self.rad_std)
+            self.estimates[idx] = estimate
+            new_cells.extend(self._mark(estimate))
 
         bbox = cells_bbox(new_cells)
         if bbox is None:

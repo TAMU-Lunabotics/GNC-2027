@@ -7,7 +7,7 @@ mock_obstacle_detector:
     # Visibility (measured from the sensor, to the obstacle's edge)
     min_range_m: 0.3
     max_range_m: 3.0
-    fov_deg: 90.0                 # centered on robot heading; spec table said 360.0 -- CONFIRM
+    fov_deg: 360.0                 # centered on robot heading; spec table said 360.0 -- CONFIRM
 
     # Noise at zero range (scaled up with distance by the node)
     position_noise_std_m: 0.03
