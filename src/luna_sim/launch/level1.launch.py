@@ -4,6 +4,7 @@
   ros2 launch luna_sim level1.launch.py seed:=42
   ros2 launch luna_sim level1.launch.py seed:=42 rtf:=5.0 rviz:=false #runs at x5 speed
   ros2 launch luna_sim level1.launch.py oracle_localization:=false   # bring your own localization, we can flip the default later when localization exists
+  ros2 launch luna_sim level1.launch.py obstacle_sensor:=false   # walls only
 """
 import os
 
@@ -79,8 +80,22 @@ def _setup(context):
         actions.append(Node(
             package='rviz2', executable='rviz2', name='rviz2', output='screen',
             arguments=['-d', rviz_cfg] if os.path.exists(rviz_cfg) else [],
-            additional_env={'QT_ENABLE_HIGHDPI_SCALING': '0'}, 
+            additional_env={'QT_ENABLE_HIGHDPI_SCALING': '0'},
             parameters=[sim_time]))
+
+    # 8. Mock perception: ground truth -> /map_updates, stands in for lidar -> obstacle_detector.
+    if is_true('obstacle_sensor'):
+        actions.append(Node(
+            package='luna_sim', executable='mock_obstacle_detector',
+            name='mock_obstacle_detector', output='screen',
+            parameters=[
+                sim_time,
+                os.path.join(sim_share, 'config', 'sensors', 'mock_obstacle_detector.yaml'),
+                {'arena_json': str(paths['json']), 'seed': seed},
+            ]))
+    else:
+        actions.append(LogInfo(msg='[level1] obstacle_sensor:=false -> nothing publishes '
+                                   '/map_updates; the planner sees walls only'))
 
     return actions
 
@@ -97,6 +112,8 @@ def generate_launch_description():
         DeclareLaunchArgument('rtf', default_value='1.0',
                               description='real-time factor; >1 runs faster than real time'),
         DeclareLaunchArgument('oracle_localization', default_value='true'),
+        DeclareLaunchArgument('obstacle_sensor', default_value='true',
+                              description='mock lidar obstacle detection -> /map_updates'),
         DeclareLaunchArgument('rviz', default_value='true'),
         OpaqueFunction(function=_setup),
     ])

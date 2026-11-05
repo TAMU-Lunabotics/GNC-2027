@@ -17,12 +17,14 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(map_msgs REQUIRED)
 
 set(PY_EXECUTABLES
   arena_gen
   kinematic_base
   oracle_localizer
   sim_clock
+  mock_obstacle_detector
   # scorer
 )
 
@@ -37,6 +39,7 @@ install(DIRECTORY launch config rviz worlds
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
   # the following line skips the linter which checks for copyrights
   # comment the line when a copyright and license is added to all source files
   set(ament_cmake_copyright_FOUND TRUE)
@@ -44,6 +47,13 @@ if(BUILD_TESTING)
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  ament_add_pytest_test(test_visibility test/test_visibility.py
+    TIMEOUT 60
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  ament_add_pytest_test(test_grid_patch test/test_grid_patch.py
+    TIMEOUT 60
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
 
 ament_package()
