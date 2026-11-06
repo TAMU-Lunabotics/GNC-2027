@@ -11,20 +11,13 @@ Right now `oracle_localizer` gives everyone the true pose, but of course on the 
 Odometry and the gyro carry the estimate between tag sightings, tags pull it back to the truth to reset drift.
 
 ```
-/wheel_odom ────────────────────────────────────────┐
-/imu/data_raw ──────────────────────────────────────┤
-/cam_front/detections ─┐                            ├──► ekf_global ──► /odometry/filtered ──► planner, guidance
-/cam_rear/detections ──┼──► tag_localizer ──► /tag_pose ┘          └─► TF map → odom
-tags_yaml ─────────────┘          └─► /ekf_global/set_pose (first fix), /localization/initialized
-```
-```
-/wheel_odom ───┬──────────────────────────────────────┐
-/imu/data_raw ─┼──────────────────────────────────────┤
-               │                                      │
-               └──► ekf_local ──► /odometry/local     │
-                         └─► TF odom → base_link      │
-                                                      │
-/cam_front/detections ─┐                              ├──► ekf_global ──► /odometry/filtered ──► planner, guidance
+/wheel_odom ──────┬─────────────────────────────────────┐
+/imu/data_raw ────┼─────────────────────────────────────┤
+                  │                                     │
+                  └──► ekf_local ──► /odometry/local    │
+                            └─► TF odom → base_link     │
+                                                        │
+/cam_front/detections ─┐                                ├──► ekf_global ──► /odometry/filtered ──► planner, guidance
 /cam_rear/detections ──┼──► tag_localizer ──► /tag_pose ┘          └─► TF map → odom
 tags_yaml ─────────────┘          └─► /ekf_global/set_pose (first fix), /localization/initialized
 ```

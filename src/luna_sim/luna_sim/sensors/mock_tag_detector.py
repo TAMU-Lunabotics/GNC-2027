@@ -646,7 +646,7 @@ class MockTagDetector(Node):
         """
         result = MarkerArray()
         transforms = self.get_camera_transforms()
-        visible = self.get_visible_tags()
+        visible = self.get_visible_tags() 
         if transforms is None or visible is None:
             return result
 
