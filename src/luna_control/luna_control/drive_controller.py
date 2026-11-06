@@ -1,49 +1,98 @@
-import rclpy
-from rclpy import Node
+"""GNC wheel-target conversion. NOT a physical RoboClaw motor driver.
+
+This node publishes /auto_drive QPPS targets for an explicitly validated adapter.
+Do not bridge it to physical hardware until wheel dimensions, encoder scale,
+actuation sign, command timeout and independent stop path are verified.
+"""
 import math
 
-from nav_msgs.msg import Odometry
-from std_msgs.msg import Int32MultiArray
+import rclpy
 from geometry_msgs.msg import TwistStamped
+from rclpy.node import Node
+from std_msgs.msg import Int32MultiArray
 
-WHEEL_RADIUS = 0.048
-TICKS_PER_REV = 28 * 19.2 # 28 ppr encoder, 19.2:1 gearbox in the motor, may be missing extra external reduction
-MAX_SPEED = 0.1 # m/s
-MIN_SPEED = 0.25 # m/s
 
-class DriveController(Node):
+def wheel_targets_qpps(
+    linear_mps: float,
+    angular_radps: float,
+    track_width_m: float,
+    wheel_radius_m: float,
+    ticks_per_wheel_rev: float,
+    max_wheel_speed_mps: float,
+) -> tuple[int, int]:
+    """Convert a planar twist to left/right QPPS, preserving steering ratio.
+
+    There is intentionally no minimum nonzero speed: zero must stay zero,
+    reverse must stay negative, and small commands must not jump forward.
+    """
+    values = (
+        linear_mps, angular_radps, track_width_m, wheel_radius_m,
+        ticks_per_wheel_rev, max_wheel_speed_mps,
+    )
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
+        raise ValueError("nonfinite/non-numeric motion or wheel calibration")
+    if min(track_width_m, wheel_radius_m, ticks_per_wheel_rev, max_wheel_speed_mps) <= 0:
+        raise ValueError("measured positive wheel calibration and speed limit required")
+
+    left_mps = linear_mps - angular_radps * track_width_m / 2.0
+    right_mps = linear_mps + angular_radps * track_width_m / 2.0
+    scale = max(1.0, abs(left_mps) / max_wheel_speed_mps,
+                abs(right_mps) / max_wheel_speed_mps)
+    conversion = ticks_per_wheel_rev / (2.0 * math.pi * wheel_radius_m)
+    return (round(left_mps / scale * conversion),
+            round(right_mps / scale * conversion))
+
+
+class DriveControllerNode(Node):
     def __init__(self):
-        super.__init__("drive_controller")
-
-        self.rate_hz = float(self.declare_parameter('rate_hz', 20.0).value)
-        self.track_width = float(self.declare_parameter('track_width', 0.8).value)
-        # state
-        self.setpoints = [(0,0), (0,0)]
-        self.odom = None
-
-        # Subscirbers
-        # self.odom_sub = self.create_subscription(Odometry, "/wheel/odometry", 10, self.odom_cb)
-        self.cmd_sub = self.create_subscription(TwistStamped, "/cmd_vel", 10, self.control_loop)
-
-        # Publishers
+        super().__init__("drive_controller")
+        p = self.declare_parameter
+        # Zero defaults deliberately prevent uncalibrated operation.
+        p("track_width_m", 0.0)
+        p("wheel_radius_m", 0.0)
+        p("ticks_per_wheel_rev", 0.0)
+        p("max_wheel_speed_mps", 0.0)
+        get = lambda key: float(self.get_parameter(key).value)
+        self.geometry = (
+            get("track_width_m"),
+            get("wheel_radius_m"),
+            get("ticks_per_wheel_rev"),
+            get("max_wheel_speed_mps"),
+        )
+        wheel_targets_qpps(0.0, 0.0, *self.geometry)
         self.drive_pub = self.create_publisher(Int32MultiArray, "/auto_drive", 10)
-
-        self.create_timer(self.rate_hz, self.control_loop)
-
-
-    def mps_to_qpps(v):
-        return int(v / (2 * math.pi * WHEEL_RADIUS) * TICKS_PER_REV)
+        self.cmd_sub = self.create_subscription(
+            TwistStamped, "/cmd_vel", self.control_loop, 10
+        )
+        self.get_logger().warn(
+            "GNC /auto_drive QPPS output only; no physical actuator bridge is installed"
+        )
 
     def control_loop(self, msg):
-        v_left = self.mps_to_qpps(msg.twist.linear.x - msg.twist.angular.z*self.track_width / 2)
-        v_right = self.mps_to_qpps(msg.twist.linear.x + msg.twist.angular.z*self.track_width / 2)
+        try:
+            targets = wheel_targets_qpps(
+                msg.twist.linear.x, msg.twist.angular.z, *self.geometry
+            )
+        except ValueError as exc:
+            targets = (0, 0)
+            self.get_logger().error(f"Rejected motion command: {exc}")
+        self.drive_pub.publish(Int32MultiArray(data=list(targets)))
 
-        v_left = max(MIN_SPEED, min(self.mps_to_qpps(MIN_SPEED), self.mps_to_qpps(MAX_SPEED, v_left)))
-        v_right = max(MIN_SPEED, min(self.mps_to_qpps(MIN_SPEED), self.mps_to_qpps(MAX_SPEED, v_right)))
 
-        vel_msg = Int32MultiArray()
-        vel_msg.data = [v_left, v_right]
+def main(args=None):
+    rclpy.init(args=args)
+    node = None
+    try:
+        node = DriveControllerNode()
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if node is not None:
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
-        self.get_logger().info(f'QPPS: left: {v_left}, right: {v_right}')
 
-        self.drive_pub.publish(vel_msg)
+if __name__ == "__main__":
+    main()
