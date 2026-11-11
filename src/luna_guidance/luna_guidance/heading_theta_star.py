@@ -19,6 +19,7 @@ def heading_theta_star(
     max_expansions=20000,
     merge_turnable=False,
     allow_straight_departure=False,
+    should_cancel=None,
 ):
     """
     Return a result dictionary containing status, path, and search counts.
@@ -171,6 +172,8 @@ def heading_theta_star(
             shortcut_updates += 1
 
     while frontier:
+        if should_cancel is not None and should_cancel():
+            return {"status": "CANCELLED", "path": [], "expanded": expanded}
         _, _, record_id = heapq.heappop(frontier)
         node, incoming, _, cost, parent_id = records[record_id]
         if cost > best.get(state_key(incoming, node), math.inf):

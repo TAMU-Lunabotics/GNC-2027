@@ -20,7 +20,7 @@ def wrap(a):
 
 
 def yaw_to_quaternion(yaw):
-    """(x, y, z, w) for a rotation about z only"""
+    """Return (x, y, z, w) for a rotation about z only."""
     return 0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0)
 
 
@@ -38,9 +38,11 @@ def quat_to_matrix(x, y, z, w):
 
 
 def detection_in_base(p_opt, R_opt_tag, cov6_opt, R_base_opt, t_base_opt):
-    """Tag detection in the camera optical frame -> (x_b, y_b, psi_b) in base_link + 3x3 covariance.
+    """
+    Transform the camera optical-frame detection into base_link.
 
-    psi_b = direction the tag's face (its z axis) points, seen from base_link.
+    Return (x_b, y_b, psi_b) and a 3x3 covariance. psi_b is the direction
+    the tag's face (its z axis) points, seen from base_link.
     """
     p_b = R_base_opt @ p_opt + t_base_opt
     face_b = R_base_opt @ R_opt_tag[:, 2]
@@ -56,7 +58,11 @@ def detection_in_base(p_opt, R_opt_tag, cov6_opt, R_base_opt, t_base_opt):
 
 
 def robot_pose_from_tag(meas_b, sigma_b, tag_xy_yaw):
-    """Measurement in base_link + known tag pose in map -> robot (x, y, theta) in map + 3x3 covariance."""
+    """
+    Estimate the robot's map-frame pose from a detection and known tag pose.
+
+    The detection is in base_link. Return (x, y, theta) and a 3x3 covariance.
+    """
     xb, yb, psib = meas_b
     Xt, Yt, Psit = tag_xy_yaw
 
@@ -148,12 +154,18 @@ class TagLocalizerNode(Node):
         )
 
         # Subscribers
-        self.front_detection_sub = self.create_subscription(TagDetectionArray, "/cam_front/detections", self.extract_pose, detection_qos)
-        self.rear_detection_sub = self.create_subscription(TagDetectionArray, "/cam_rear/detections", self.extract_pose, detection_qos)
+        self.front_detection_sub = self.create_subscription(
+            TagDetectionArray, "/cam_front/detections", self.extract_pose, detection_qos,
+        )
+        self.rear_detection_sub = self.create_subscription(
+            TagDetectionArray, "/cam_rear/detections", self.extract_pose, detection_qos,
+        )
 
         # Publishers
         self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, "/tag_pose", pose_qos)
-        self.init_pose_pub = self.create_publisher(PoseWithCovarianceStamped, "/ekf_global/set_pose", 1)
+        self.init_pose_pub = self.create_publisher(
+            PoseWithCovarianceStamped, "/ekf_global/set_pose", 1,
+        )
         self.init_pub = self.create_publisher(Bool, "/localization/initialized", init_qos)
 
         self.init_pub.publish(Bool(data=False))

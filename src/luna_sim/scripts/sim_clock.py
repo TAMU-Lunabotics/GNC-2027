@@ -2,4 +2,4 @@
 from luna_sim.sim_clock import main
 
 if __name__ == '__main__':
-      main()
+    main()

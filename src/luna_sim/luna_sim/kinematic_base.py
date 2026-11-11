@@ -9,7 +9,7 @@ from rclpy.node import Node
 
 import math
 
-from geometry_msgs.msg import PoseStamped, Twist, TwistStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
 
 from luna_sim.arena.layout import load_layout
 
@@ -56,11 +56,13 @@ class KinematicBase(Node):
         self.pose_pub = self.create_publisher(PoseStamped, '/sim/ground_truth/pose', 10)
         # Subscribers
         self.twist_pub = self.create_publisher(TwistStamped, '/sim/ground_truth/twist', 10)
-        
+
         self.create_subscription(TwistStamped, '/cmd_vel', self.on_cmd, 10)
 
         self.create_timer(1.0 / 50.0, self.on_step)
-        self.get_logger().info(f"start pose ({self.x:.2f}, {self.y:.2f}, yaw {self.yaw:.2f}) from {layout_path}")
+        self.get_logger().info(
+            f"start pose ({self.x:.2f}, {self.y:.2f}, yaw {self.yaw:.2f}) from {layout_path}"
+        )
 
     def on_cmd(self, msg):
         self.cmd_v = clamp(msg.twist.linear.x, self.max_v)

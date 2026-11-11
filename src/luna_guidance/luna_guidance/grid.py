@@ -1,5 +1,6 @@
 """ROS-independent grid coordinate helpers."""
 
+from collections import deque
 import math
 from dataclasses import dataclass
 
@@ -124,3 +125,38 @@ def occupancy_to_blocked(
         blocked[row * geometry.width:(row + 1) * geometry.width]
         for row in range(geometry.height)
     ]
+
+
+def nearby_cell_centers(geometry, position, radius):
+    """Yield centers within radius in breadth-first order from the start cell."""
+    start = geometry.world_to_cell(*position)
+    if not geometry.contains(start) or radius <= 0.0:
+        return
+    pending = deque([start])
+    seen = {start}
+    while pending:
+        cell = pending.popleft()
+        point = geometry.cell_to_world(cell)
+        if math.dist(position, point) > radius:
+            continue
+        yield point
+        x, y = cell
+        for neighbor in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if neighbor not in seen and geometry.contains(neighbor):
+                seen.add(neighbor)
+                pending.append(neighbor)
+
+
+def apply_occupancy_patch(data, geometry, x, y, width, height, patch):
+    """Replace a row-major rectangle in a copy of a complete occupancy grid."""
+    if (width <= 0 or height <= 0 or x < 0 or y < 0
+            or x + width > geometry.width or y + height > geometry.height):
+        raise ValueError('Map update lies outside the map.')
+    if len(patch) != width * height:
+        raise ValueError('Map update data length does not match its bounds.')
+
+    result = list(data)
+    for row in range(height):
+        start = (y + row) * geometry.width + x
+        result[start:start + width] = patch[row * width:(row + 1) * width]
+    return tuple(result)

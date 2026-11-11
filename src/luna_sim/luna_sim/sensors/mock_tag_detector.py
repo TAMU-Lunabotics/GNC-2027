@@ -10,9 +10,9 @@ from luna_interfaces.msg import TagDetection
 import math
 import numpy as np
 
+
 def rotation_from_rpy(roll, pitch, yaw):
     """Convert roll, pitch, yaw angles into a 3D rotation matrix."""
-
     cr, sr = math.cos(roll), math.sin(roll)
     cp, sp = math.cos(pitch), math.sin(pitch)
     cy, sy = math.cos(yaw), math.sin(yaw)
@@ -23,9 +23,9 @@ def rotation_from_rpy(roll, pitch, yaw):
         [-sp,   cp*sr,            cp*cr]
     ])
 
+
 def transform_from_xyz_rpy(xyz, rpy):
     """Create a 4x4 transformation matrix from position and rotation."""
-
     T = np.eye(4)
 
     T[:3, :3] = rotation_from_rpy(*rpy)
@@ -33,9 +33,9 @@ def transform_from_xyz_rpy(xyz, rpy):
 
     return T
 
+
 def inverse_transform(T):
     """Reverse a transformation matrix."""
-
     R = T[:3, :3]
     p = T[:3, 3]
 
@@ -46,17 +46,17 @@ def inverse_transform(T):
 
     return T_inv
 
+
 def optical_to_camera_transform():
     """Express the camera optical frame in camera body coordinates."""
-
     return transform_from_xyz_rpy(
         xyz=[0.0, 0.0, 0.0],
         rpy=[-math.pi / 2, 0.0, -math.pi / 2]
     )
 
+
 def camera_transform_in_map(robot_xyz, robot_rpy, camera_xyz, camera_rpy):
     """Calculate the camera optical frame's pose in the map frame."""
-
     T_map_base = transform_from_xyz_rpy(robot_xyz, robot_rpy)
 
     T_base_camera = transform_from_xyz_rpy(camera_xyz, camera_rpy)
@@ -65,18 +65,18 @@ def camera_transform_in_map(robot_xyz, robot_rpy, camera_xyz, camera_rpy):
 
     return T_map_base @ T_base_camera @ T_camera_optical
 
+
 def tag_position_in_optical(T_map_optical, tag_xyz):
     """Convert a tag's map position into camera optical coordinates."""
-
     tag_map = np.array([*tag_xyz, 1.0])
 
     tag_optical = inverse_transform(T_map_optical) @ tag_map
 
     return tag_optical[:3]
 
+
 def tag_in_camera_view(tag_xyz, min_range, max_range, hfov_deg, vfov_deg):
     """Check if a tag is in front, within range, and inside the camera FOV."""
-
     x, y, z = tag_xyz
 
     # Tag must be in front of the camera
@@ -102,10 +102,10 @@ def tag_in_camera_view(tag_xyz, min_range, max_range, hfov_deg, vfov_deg):
         and abs(vertical_angle) <= vfov_limit
     )
 
+
 def projected_tag_pixels(tag_size_m, depth_m, view_angle_rad,
                          image_width_px, hfov_deg):
     """Estimate the apparent horizontal width of an AprilTag in pixels."""
-
     if depth_m <= 0:
         return 0.0
 
@@ -119,9 +119,9 @@ def projected_tag_pixels(tag_size_m, depth_m, view_angle_rad,
     # Calculate projected width
     return fx * apparent_width / depth_m
 
+
 def tag_view_angle(tag_xyz, tag_yaw, camera_xyz):
     """Calculate the viewing angle between a tag's front and the camera."""
-
     # Direction the tag is facing in the arena
     tag_normal = np.array([
         math.cos(tag_yaw),
@@ -144,9 +144,9 @@ def tag_view_angle(tag_xyz, tag_yaw, camera_xyz):
 
     return math.acos(cosine)
 
+
 def is_tag_detectable(T_map_optical, tag, config):
     """Determine whether a camera can detect an AprilTag."""
-
     tag_xyz = [tag['x'], tag['y'], tag['z']]
 
     # Convert the tag position into the camera optical frame
@@ -181,9 +181,9 @@ def is_tag_detectable(T_map_optical, tag, config):
 
     return pixels >= config['min_tag_pixels']
 
+
 def tag_pose_in_optical(T_map_optical, tag):
     """Calculate the tag's complete pose in the camera optical frame."""
-
     yaw = tag['yaw']
 
     # Tag's coordinate axes expressed in the map frame
@@ -200,9 +200,9 @@ def tag_pose_in_optical(T_map_optical, tag):
     # Convert from map coordinates to camera optical coordinates
     return inverse_transform(T_map_optical) @ T_map_tag
 
+
 def rotation_matrix_to_quaternion(R):
     """Convert a 3x3 rotation matrix to [x, y, z, w]."""
-
     trace = np.trace(R)
 
     if trace > 0:
@@ -237,9 +237,9 @@ def rotation_matrix_to_quaternion(R):
 
     return q / np.linalg.norm(q)
 
+
 def add_detection_noise(T_optical_tag, view_angle, config, rng):
     """Add Gaussian position/rotation noise and calculate covariance."""
-
     distance = np.linalg.norm(T_optical_tag[:3, 3])
 
     # Calculate noise standard deviations
@@ -272,9 +272,9 @@ def add_detection_noise(T_optical_tag, view_angle, config, rng):
 
     return T_noisy, covariance
 
+
 def make_tag_detection(tag, T_noisy, covariance):
     """Convert a simulated tag measurement into a ROS 2 message."""
-
     detection = TagDetection()
 
     # Tag identifier
@@ -298,9 +298,9 @@ def make_tag_detection(tag, T_noisy, covariance):
 
     return detection
 
+
 def quaternion_to_rpy(q):
     """Convert a ROS quaternion into roll, pitch, yaw."""
-
     x, y, z, w = q.x, q.y, q.z, q.w
 
     # Roll (rotation around X)
@@ -321,9 +321,9 @@ def quaternion_to_rpy(q):
 
     return [roll, pitch, yaw]
 
+
 def load_camera_geometry(geometry_yaml, cameras):
     """Load camera mounting positions and orientations from YAML."""
-
     with open(geometry_yaml, 'r') as file:
         geometry = yaml.safe_load(file)
 
@@ -340,6 +340,7 @@ def load_camera_geometry(geometry_yaml, cameras):
         }
 
     return camera_poses
+
 
 class MockTagDetector(Node):
     """ROS 2 node that simulates AprilTag detections."""
@@ -385,7 +386,7 @@ class MockTagDetector(Node):
 
         self.get_logger().info('Mock AprilTag detector initialized')
 
-	# Store the rover's latest ground-truth pose
+        # Store the rover's latest ground-truth pose
         self.latest_ground_truth = None
 
         # Subscribe to the simulated rover position
@@ -453,12 +454,10 @@ class MockTagDetector(Node):
 
     def ground_truth_callback(self, msg):
         """Store the latest rover pose received from the simulator."""
-
         self.latest_ground_truth = msg
 
     def get_robot_pose(self):
         """Return the rover's latest XYZ position and RPY orientation."""
-
         if self.latest_ground_truth is None:
             return None
 
@@ -476,7 +475,6 @@ class MockTagDetector(Node):
 
     def get_camera_transforms(self):
         """Calculate camera positions and orientations in the arena."""
-
         robot_pose = self.get_robot_pose()
 
         if robot_pose is None:
@@ -498,7 +496,6 @@ class MockTagDetector(Node):
 
     def get_visible_tags(self):
         """Find which AprilTags are visible to each camera."""
-
         transforms = self.get_camera_transforms()
 
         if transforms is None:
@@ -523,7 +520,6 @@ class MockTagDetector(Node):
 
     def make_noisy_detection(self, camera, tag):
         """Create a noisy detection for a visible AprilTag."""
-
         # Get the camera's position and orientation
         T_map_optical = self.get_camera_transforms()[camera]
 
@@ -549,7 +545,6 @@ class MockTagDetector(Node):
 
     def make_detection_arrays(self):
         """Create detection arrays for both cameras."""
-
         visible = self.get_visible_tags()
 
         if visible is None:
@@ -587,10 +582,8 @@ class MockTagDetector(Node):
         marker_array.markers.extend(self.make_sightline_markers().markers)
         self.marker_publisher.publish(marker_array)
 
-
     def make_tag_markers(self):
         """Create RViz markers for all AprilTags in the arena."""
-
         markers = MarkerArray()
 
         for tag in self.tags:
@@ -639,14 +632,15 @@ class MockTagDetector(Node):
         return markers
 
     def make_sightline_markers(self):
-        """Draw map-frame line segments only for currently detected tags.
+        """
+        Draw map-frame line segments only for currently detected tags.
 
         A stable marker ID is assigned to each camera. DELETE clears an old
         sightline immediately if a camera loses all its visible AprilTags.
         """
         result = MarkerArray()
         transforms = self.get_camera_transforms()
-        visible = self.get_visible_tags() 
+        visible = self.get_visible_tags()
         if transforms is None or visible is None:
             return result
 
@@ -687,9 +681,9 @@ class MockTagDetector(Node):
             result.markers.append(marker)
         return result
 
+
 def main(args=None):
     """Start and run the mock AprilTag detector node."""
-
     rclpy.init(args=args)
 
     node = MockTagDetector()

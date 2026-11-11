@@ -30,8 +30,15 @@ if(BUILD_TESTING)
     test_grid
     test_planner_pipeline
     test_path_planner_node
+    test_guidance_controller_node
+    test_obstacle_distance
+    test_pure_pursuit
+    test_regulated_pure_pursuit
     test_clearance_planning
     test_hybrid_planner
+    test_hybrid_path_follower
+    test_path_check
+    test_replan_policy
   )
     ament_add_pytest_test(${test_name}
       test/${test_name}.py

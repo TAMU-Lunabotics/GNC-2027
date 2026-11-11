@@ -13,7 +13,9 @@ class TimedActionNode(Node):
 
         for key, value in defaults.items():
             self.declare_parameter(key, value)
-        get = lambda key: self.get_parameter(key).value
+
+        def get(key):
+            return self.get_parameter(key).value
 
         self.feedback_hz = float(get('feedback_hz'))
         seed = int(get('seed'))

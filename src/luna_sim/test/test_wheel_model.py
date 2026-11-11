@@ -6,6 +6,7 @@ from luna_sim.sensors.wheel_model import expand_covariance
 
 # These basic unit tests were LLM generated
 
+
 def make_model():
     return WheelOdometryModel(
         wheel_radius=0.15,
@@ -50,7 +51,6 @@ def test_reproducibility():
         result_b = b.step(0.4, 0.5, 0.02)
 
         assert result_a == result_b
-
 
 
 # ROS covariance embedding should preserve planar terms and row-major layout.

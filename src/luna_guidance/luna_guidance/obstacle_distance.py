@@ -1,4 +1,5 @@
-"""ROS-independent occupancy-grid proximity and circular-footprint collision checks.
+"""
+ROS-independent occupancy-grid proximity and circular-footprint collision checks.
 
 A -1 occupancy value is treated as blocked (unknown space is not safe).
 Grid origin yaw is supported. Occupied cells are axis-aligned in grid coordinates.
@@ -12,6 +13,7 @@ class ObstacleDistance:
             raise ValueError('occupied_threshold must be in [1, 100]')
         self.occupied_threshold = occupied_threshold
         self.ready = False
+        self.revision = 0
         self.data = []
         self.width = self.height = 0
         self.resolution = 0.0
@@ -24,7 +26,9 @@ class ObstacleDistance:
         if not all(math.isfinite(v) for v in (resolution, origin_x, origin_y, origin_yaw)):
             raise ValueError('invalid occupancy grid geometry')
         self.width, self.height, self.resolution = int(width), int(height), float(resolution)
-        self.origin_x, self.origin_y, self.origin_yaw = float(origin_x), float(origin_y), float(origin_yaw)
+        self.origin_x, self.origin_y, self.origin_yaw = (
+            float(origin_x), float(origin_y), float(origin_yaw)
+        )
         self.data = list(data)
         self._rebuild()
         self.ready = True
@@ -46,6 +50,7 @@ class ObstacleDistance:
         self._occupied = [(i % self.width, i // self.width)
                           for i, value in enumerate(self.data)
                           if value < 0 or value >= self.occupied_threshold]
+        self.revision += 1
 
     def _local(self, x, y):
         dx, dy = x - self.origin_x, y - self.origin_y

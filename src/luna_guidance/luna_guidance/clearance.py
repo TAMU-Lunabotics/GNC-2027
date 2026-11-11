@@ -1,5 +1,6 @@
 """Geometric distances for circular-footprint collision checking."""
 
+from itertools import groupby
 import math
 
 
@@ -118,18 +119,23 @@ class CircularClearance:
         # A tiny numerical allowance, separate from the physical margin.
         self.limit = self.clearance + 1e-9
         self.obstacles = []
+        self.occupied_spans = []
 
         resolution = geometry.resolution
         for y, row in enumerate(blocked):
-            for x, occupied in enumerate(row):
-                if occupied:
-                    rectangle = (
-                        x * resolution,
-                        y * resolution,
-                        (x + 1) * resolution,
-                        (y + 1) * resolution,
-                    )
-                    self.obstacles.append(((x, y), rectangle))
+            bottom, top = y * resolution, (y + 1) * resolution
+            for occupied, run in groupby(enumerate(row), key=lambda entry: bool(entry[1])):
+                if not occupied:
+                    continue
+                cells = [
+                    ((x, y), (x * resolution, bottom, (x + 1) * resolution, top))
+                    for x, _ in run
+                ]
+                self.obstacles.extend(cells)
+                # A contiguous run is exactly one filled rectangle. Retain
+                # its cells for the existing point rejection diagnostics.
+                span = (cells[0][1][0], bottom, cells[-1][1][2], top)
+                self.occupied_spans.append((span, cells))
 
     def to_local(self, point):
         """Convert a finite world position into grid-local meters."""
@@ -164,13 +170,16 @@ class CircularClearance:
         if reason is not None:
             return reason
 
-        for cell, rectangle in self.obstacles:
-            gap = point_rectangle_distance(point, rectangle)
-            if gap <= self.limit:
-                return (
-                    f"Insufficient obstacle clearance near cell {cell}: "
-                    f"{gap:.4f} m; must exceed {self.clearance:.4f} m."
-                )
+        for span, cells in self.occupied_spans:
+            if point_rectangle_distance(point, span) > self.limit:
+                continue
+            for cell, rectangle in cells:
+                gap = point_rectangle_distance(point, rectangle)
+                if gap <= self.limit:
+                    return (
+                        f"Insufficient obstacle clearance near cell {cell}: "
+                        f"{gap:.4f} m; must exceed {self.clearance:.4f} m."
+                    )
         return None
 
     def segment_is_free(self, world_start, world_end):
@@ -191,7 +200,7 @@ class CircularClearance:
         lower_y = min(start[1], end[1]) - self.limit
         upper_y = max(start[1], end[1]) + self.limit
 
-        for _, rectangle in self.obstacles:
+        for rectangle, _ in self.occupied_spans:
             xmin, ymin, xmax, ymax = rectangle
 
             # Skip obstacles outside the segment's expanded bounding box.
@@ -219,14 +228,35 @@ class CircularClearance:
             self.geometry.cell_to_world(end_cell),
         )
 
-    def center_blocked_grid(self):
-        """Return blocked flags for cell centers, not whole free cells."""
-        return [
-            [
-                self.point_reason(
-                    self.geometry.cell_to_world((x, y))
-                ) is not None
-                for x in range(self.geometry.width)
-            ]
-            for y in range(self.geometry.height)
-        ]
+    def center_blocked_grid(self, should_cancel=None):
+        """Return blocked flags for cell centers, or None if cancelled."""
+        grid = []
+        width = self.geometry.width
+        for y in range(self.geometry.height):
+            if should_cancel is not None and should_cancel():
+                return None
+            row = [True] * width
+            centers = []
+            for x in range(width):
+                point = self.to_local(self.geometry.cell_to_world((x, y)))
+                if self._boundary_reason(point) is None:
+                    centers.append((x, point))
+
+            if centers:
+                min_y = min(point[1] for _, point in centers)
+                max_y = max(point[1] for _, point in centers)
+                # A span is a filled rectangle. Only spans within vertical
+                # clearance of this row can block any of its centers.
+                spans = [
+                    span for span, _ in self.occupied_spans
+                    if span[1] - max_y <= self.limit and min_y - span[3] <= self.limit
+                ]
+                for x, point in centers:
+                    row[x] = any(
+                        span[0] - point[0] <= self.limit
+                        and point[0] - span[2] <= self.limit
+                        and point_rectangle_distance(point, span) <= self.limit
+                        for span in spans
+                    )
+            grid.append(row)
+        return grid

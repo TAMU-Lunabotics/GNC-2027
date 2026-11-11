@@ -1,20 +1,49 @@
-"""ROS path planner with circular or heading-aware hybrid clearance."""
+"""ROS path planner with map-driven replanning around the Stage 1 search."""
 
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 import math
+from threading import Event
 import time
 
 import rclpy
 from geometry_msgs.msg import PoseStamped
 from luna_interfaces.msg import PlannerStatus
+from map_msgs.msg import OccupancyGridUpdate
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
-from luna_guidance.clearance import CircularClearance
-from luna_guidance.grid import GridGeometry, occupancy_to_blocked
-from luna_guidance.heading_clearance import CircleFirstHeadingClearance
-from luna_guidance.heading_theta_star import heading_theta_star
-from luna_guidance.theta_star import simplify_path, theta_star
+from luna_guidance.grid import GridGeometry, apply_occupancy_patch, occupancy_to_blocked
+from luna_guidance.path_check import path_length, project_path, remaining_path
+from luna_guidance.replan_policy import should_replan
+from luna_guidance.route_search import (
+    PlanningMap, SearchSettings, find_route, pose_rejection, remaining_rejection,
+)
+
+
+@dataclass
+class SearchJob:
+    future: Future
+    cancel: Event
+    map_version: int
+    trigger: str
+    position: tuple[float, float]
+    requested_at: float
+
+
+def _timed_search(snapshot, settings, position, yaw, goal, goal_yaw, cancel,
+                  allow_escape):
+    started = time.perf_counter()
+    try:
+        route = find_route(
+            snapshot, settings, position, yaw, goal, goal_yaw, cancel.is_set,
+            allow_escape=allow_escape,
+        )
+    except ValueError as exc:
+        return None, str(exc), time.perf_counter() - started
+    return route, '', time.perf_counter() - started
 
 
 class PathPlannerNode(Node):
@@ -54,7 +83,7 @@ class PathPlannerNode(Node):
         if not self.map_frame:
             raise ValueError('map_frame must not be empty.')
 
-        # The supplied YAML selects hybrid mode; standalone defaults to circle.
+        # The supplied YAML selects hybrid. A bare node defaults to circle.
         self.footprint_mode = self.declare_parameter(
             'footprint_mode', 'circle'
         ).value
@@ -112,13 +141,54 @@ class PathPlannerNode(Node):
             if self.robot_radius_m < corner_radius:
                 raise ValueError('robot_radius_m must enclose the footprint.')
 
-        self.start_yaw = None
+        self.rate_hz = self.declare_parameter('rate_hz', 10.0).value
+        self.min_replan_interval_s = self.declare_parameter('min_replan_interval_s', 0.5).value
+        self.replan_deviation_m = self.declare_parameter('replan_deviation_m', 0.5).value
+        self.replan_period_s = self.declare_parameter('replan_period_s', 0.0).value
+        self.improvement_ratio = self.declare_parameter('improvement_ratio', 0.9).value
+        escape_radius = self.declare_parameter('start_escape_radius_m', 0.3).value
+        use_map_updates = self.declare_parameter('use_map_updates', False).value
+        for name, value in (
+            ('rate_hz', self.rate_hz),
+            ('min_replan_interval_s', self.min_replan_interval_s),
+            ('replan_deviation_m', self.replan_deviation_m),
+            ('replan_period_s', self.replan_period_s),
+            ('start_escape_radius_m', escape_radius),
+        ):
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f'{name} must be finite and nonnegative.')
+        if self.rate_hz <= 0 or self.replan_deviation_m <= 0:
+            raise ValueError('rate_hz and replan_deviation_m must be positive.')
+        if not 0 < self.improvement_ratio < 1:
+            raise ValueError('improvement_ratio must be between 0 and 1.')
+        self.settings = SearchSettings(
+            self.footprint_mode, self.robot_radius_m, self.safety_margin_m,
+            self.robot_length_m, self.robot_width_m, self.heading_error_deg,
+            self.turn_weight, self.max_expansions, self.merge_turnable,
+            self.allow_straight_departure, escape_radius,
+        )
 
-        self.geometry = None
-        self.clearance_checker = None
-        self.blocked = None
+        self.start_yaw = None
         self.position = None
         self.pose_received_at = None
+        self.snapshot = None
+        self.map_data = None
+        self.base_map = None
+        self.map_version = 0
+        self.map_error = None
+        self.pending_map = None
+        self.pending_updates = deque()
+        self.pending_goal = None
+        self.goal = None
+        self.route = None
+        self.progress = None
+        self.progress_position = None
+        self.pending_plan = None
+        self.blocked_replan_pending = False
+        self.last_attempt = None
+        self.input_error = None
+        self.job = None
+        self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix='theta_search')
 
         self.latched_qos = QoSProfile(
             depth=1,
@@ -133,11 +203,18 @@ class PathPlannerNode(Node):
             PlannerStatus, '/planning/status', self.latched_qos
         )
 
-        self.last_map = None
-
         self.create_subscription(
             OccupancyGrid, '/map', self.on_map, self.latched_qos
         )
+        if use_map_updates:
+            update_qos = QoSProfile(
+                depth=10,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            )
+            self.create_subscription(
+                OccupancyGridUpdate, '/map_updates', self.on_map_update, update_qos
+            )
         self.create_subscription(
             Odometry, '/odometry/filtered', self.on_odom, 10
         )
@@ -147,6 +224,9 @@ class PathPlannerNode(Node):
 
         self.clear_path()
         self.publish_status(PlannerStatus.IDLE, 'Waiting for a goal.')
+        self._map_ready = self.create_guard_condition(self._on_map_ready)
+        self._search_ready = self.create_guard_condition(self._on_search_ready)
+        self.create_timer(1.0 / self.rate_hz, self.on_timer)
 
     def publish_status(self, state, message, path_length_m=0.0,
                        planning_time_s=0.0):
@@ -182,83 +262,83 @@ class PathPlannerNode(Node):
         return math.atan2(2.0 * w * z, 1.0 - 2.0 * z * z)
 
     def on_map(self, msg):
-        # Ignore repeated publications of identical map contents.
-        previous = self.last_map
-        if previous is not None:
-            if (
-                msg.header.frame_id == previous.header.frame_id
-                and msg.info == previous.info
-                and msg.data == previous.data
-            ):
-                return
+        self.pending_map = (msg, time.perf_counter())
+        self._map_ready.trigger()
 
-        self.clear_path()
-        self.geometry = None
-        self.clearance_checker = None
-        self.blocked = None
-        self.last_map = None
+    def on_map_update(self, msg):
+        # The simulator retains ten patches. Allow that replay to arrive
+        # before the latched base map, since the topics are independent.
+        if self.snapshot is None and self.pending_map is None:
+            if len(self.pending_updates) >= 10:
+                self.pending_updates.popleft()
+        self.pending_updates.append((msg, time.perf_counter()))
+        self._map_ready.trigger()
+
+    def _consume_map(self):
+        if self.pending_map is None:
+            if self.snapshot is None or not self.pending_updates:
+                return None
+
+        full, self.pending_map = self.pending_map, None
+        updates = list(self.pending_updates)
+        self.pending_updates.clear()
+        old = self.snapshot
+        geometry = old.geometry if old else None
+        data = self.map_data
+        base = self.base_map
+        received = [t for _, t in updates]
 
         try:
-            if msg.header.frame_id != self.map_frame:
-                raise ValueError(
-                    f'Map frame must be {self.map_frame!r}.'
+            if full is not None:
+                msg, stamp = full
+                if msg.header.frame_id != self.map_frame:
+                    raise ValueError(f'Map frame must be {self.map_frame!r}.')
+                origin = msg.info.origin
+                geometry = GridGeometry(
+                    msg.info.width, msg.info.height, msg.info.resolution,
+                    origin.position.x, origin.position.y,
+                    self.planar_yaw(origin.orientation),
                 )
+                incoming = (geometry, tuple(msg.data))
+                if incoming != base or old is None:
+                    base = incoming
+                    data = incoming[1]
+                    if old is not None:
+                        updates = [(m, t) for m, t in updates if t >= stamp]
+                    received = [stamp, *(t for _, t in updates)]
 
-            origin = msg.info.origin
-            yaw = self.planar_yaw(origin.orientation)
-            geometry = GridGeometry(
-                width=msg.info.width,
-                height=msg.info.height,
-                resolution=msg.info.resolution,
-                origin_x=origin.position.x,
-                origin_y=origin.position.y,
-                origin_yaw=yaw,
-            )
+            for msg, _ in updates:
+                if msg.header.frame_id != self.map_frame:
+                    raise ValueError(f'Map update frame must be {self.map_frame!r}.')
+                data = apply_occupancy_patch(
+                    data, geometry, msg.x, msg.y, msg.width, msg.height, msg.data,
+                )
+            if old is not None and geometry == old.geometry and data == self.map_data:
+                self.base_map = base
+                return None
 
             blocked = occupancy_to_blocked(
-                msg.data,
-                geometry,
-                occupied_threshold=self.occupied_threshold,
-                unknown_is_blocked=self.unknown_is_blocked,
+                data, geometry, self.occupied_threshold, self.unknown_is_blocked,
             )
-            if self.footprint_mode == 'hybrid':
-                checker = CircleFirstHeadingClearance(
-                    blocked,
-                    geometry,
-                    length_m=self.robot_length_m,
-                    width_m=self.robot_width_m,
-                    margin_m=self.safety_margin_m,
-                    heading_error_deg=self.heading_error_deg,
-                    turn_radius_m=self.robot_radius_m,
-                )
-                # Hybrid feasibility depends on heading, so do not
-                # pre-reject cells using a circle-inflated grid.
-                center_blocked = blocked
-            else:
-                checker = CircularClearance(
-                    blocked,
-                    geometry,
-                    self.robot_radius_m,
-                    self.safety_margin_m,
-                )
-                center_blocked = checker.center_blocked_grid()
-        except ValueError as exc:
-            reason = f'Map rejected: {exc}'
-            self.publish_status(PlannerStatus.FAILED, reason)
-            self.get_logger().error(reason)
-            return
+            self.map_data, self.base_map = data, base
+            self.map_error = None
+            if old is not None and geometry == old.geometry and blocked == old.raw_blocked:
+                return None
 
-        self.geometry = geometry
-        self.blocked = center_blocked
-        self.clearance_checker = checker
-        self.last_map = msg
-        self.publish_status(
-            PlannerStatus.IDLE, 'Map loaded; send a new goal.'
+            checker = self.settings.checker(blocked, geometry)
+            self.snapshot = PlanningMap(geometry, blocked, checker)
+        except ValueError as exc:
+            self.snapshot = self.map_data = self.base_map = None
+            self.map_error = f'Map rejected: {exc}'
+            self.get_logger().error(self.map_error)
+
+        self.map_version += 1
+        geometry_changed = old is not None and (
+            self.snapshot is None or old.geometry != self.snapshot.geometry
         )
-        self.get_logger().info(
-            f'Map loaded: {geometry.width} x {geometry.height}, '
-            f'{geometry.resolution:.3f} m/cell'
-        )
+        if geometry_changed or self.snapshot is None:
+            self._cancel_search()
+        return geometry_changed, min(received, default=time.perf_counter())
 
     def on_odom(self, msg):
         position = msg.pose.pose.position
@@ -281,206 +361,253 @@ class PathPlannerNode(Node):
         self.start_yaw = yaw
         self.pose_received_at = self.get_clock().now()
 
-    def plan_hybrid(self, goal, goal_yaw):
-        """
-        Plan and recheck straight segments and stationary turns.
-
-        The search leaves goal heading unconstrained. A requested final
-        rotation is checked afterward; rejection does not prove that no
-        alternative arrival heading could work.
-        """
-        if self.start_yaw is None:
-            raise ValueError('No valid starting orientation received.')
-
-        checker = self.clearance_checker
-        result = heading_theta_star(
-            checker,
-            self.position,
-            goal,
-            self.start_yaw,
-            turn_weight=self.turn_weight,
-            max_expansions=self.max_expansions,
-            merge_turnable=self.merge_turnable,
-            allow_straight_departure=self.allow_straight_departure,
-        )
-
-        if result['status'] != 'PATH_FOUND':
-            raise ValueError(f"Hybrid search: {result['status']}")
-
-        points = result['path']
-        if (
-            not points
-            or tuple(points[0]) != tuple(self.position)
-            or tuple(points[-1]) != tuple(goal)
-        ):
-            raise ValueError('Hybrid path has incorrect endpoints.')
-
-        def heading_change(a, b):
-            return abs(math.atan2(math.sin(a - b), math.cos(a - b)))
-
-        yaw = self.start_yaw
-        if not checker.pose_is_free(points[0], yaw):
-            raise ValueError('Final recheck rejected the starting footprint.')
-
-        for a, b in zip(points, points[1:]):
-            if math.dist(a, b) <= 1e-12:
-                raise ValueError('Hybrid path contains a zero-length segment.')
-
-            departure = math.atan2(b[1] - a[1], b[0] - a[0])
-            if (
-                heading_change(yaw, departure) > 1e-9
-                and not checker.turn_is_free(a)
-            ):
-                raise ValueError('Final recheck rejected a stationary turn.')
-            if not checker.straight_is_free(a, b):
-                raise ValueError('Final recheck rejected a straight segment.')
-            yaw = departure
-
-        if (
-            heading_change(yaw, goal_yaw) > 1e-9
-            and not checker.turn_is_free(goal)
-        ):
-            raise ValueError(
-                'GOAL_TURN_REJECTED: requested final rotation lacks clearance; '
-                'alternative arrival headings were not searched.'
-            )
-
-        return points
-
-    def plan_circle(self, goal):
-        """Plan and recheck circular clearance, including exact endpoints."""
-        geometry = self.geometry
-        checker = self.clearance_checker
-        start_world = self.position
-
-        for name, position in (
-            ('Start', start_world),
-            ('Goal', goal),
-        ):
-            reason = checker.point_reason(position)
-            if reason is not None:
-                raise ValueError(f'{name}: {reason}')
-
-        # Prefer the direct route when the full segment is clear.
-        if checker.segment_is_free(start_world, goal):
-            points = [start_world, goal]
-        else:
-            start_cell = geometry.world_to_cell(*start_world)
-            goal_cell = geometry.world_to_cell(*goal)
-
-            for name, cell, position in (
-                ('Start', start_cell, start_world),
-                ('Goal', goal_cell, goal),
-            ):
-                if not geometry.contains(cell):
-                    raise ValueError(f'{name} lies outside the map.')
-
-                x, y = cell
-                if self.blocked[y][x]:
-                    raise ValueError(
-                        f'{name} position is valid, but its grid-cell '
-                        'center lacks clearance. Grid attachment failed.'
-                    )
-
-                center = geometry.cell_to_world(cell)
-                if not checker.segment_is_free(position, center):
-                    raise ValueError(
-                        f'{name} cannot connect safely to its grid-cell '
-                        'center. Grid attachment failed.'
-                    )
-
-            cells = theta_star(
-                self.blocked,
-                start_cell,
-                goal_cell,
-                segment_is_free=checker.cell_segment_is_free,
-            )
-            if not cells:
-                raise ValueError(
-                    'Search found no route on the circular-clearance '
-                    'grid.'
-                )
-
-            points = [start_world]
-            points.extend(
-                geometry.cell_to_world(cell)
-                for cell in simplify_path(cells)
-            )
-            points.append(goal)
-
-        # Validate the final geometry, including exact endpoints,
-        # before sampling it into a ROS Path.
-        for a, b in zip(points, points[1:]):
-            if not checker.segment_is_free(a, b):
-                raise ValueError(
-                    'Final path segment failed circular clearance.'
-                )
-
-
-        return points
-
     def on_goal(self, msg):
-        started = time.perf_counter()
-        self.clear_path()
-        self.publish_status(PlannerStatus.PLANNING, 'Processing new goal.')
+        self.pending_goal = (msg, time.perf_counter())
 
+    def _consume_goal(self):
+        if self.pending_goal is None:
+            return
+        (msg, received), self.pending_goal = self.pending_goal, None
+        self._cancel_search()
+        self._hold_route(force=True)
+        self.goal = self.pending_plan = self.input_error = None
+        self.blocked_replan_pending = False
         try:
             if msg.header.frame_id != self.map_frame:
-                raise ValueError(
-                    f'Goal frame must be {self.map_frame!r}.'
-                )
-            if (
-                self.geometry is None
-                or self.blocked is None
-                or self.clearance_checker is None
-            ):
-                raise ValueError('No valid map received.')
-            if self.position is None or self.pose_received_at is None:
-                raise ValueError('No valid odometry received.')
-
-            age = (
-                self.get_clock().now() - self.pose_received_at
-            ).nanoseconds * 1e-9
-            if age < 0 or age > self.odom_timeout_s:
-                raise ValueError('Odometry is stale or the clock moved backward.')
-
+                raise ValueError(f'Goal frame must be {self.map_frame!r}.')
             goal = (msg.pose.position.x, msg.pose.position.y)
             if not all(math.isfinite(value) for value in goal):
                 raise ValueError('Goal position must be finite.')
-            goal_yaw = self.planar_yaw(msg.pose.orientation)
-
-            geometry = self.geometry
-
-            if self.footprint_mode == 'hybrid':
-                points = self.plan_hybrid(goal, goal_yaw)
-            else:
-                points = self.plan_circle(goal)
-
-            path, length = self.make_path(
-                points, goal_yaw, geometry.resolution
-            )
+            yaw = self.planar_yaw(msg.pose.orientation)
         except ValueError as exc:
-            elapsed = time.perf_counter() - started
-            self.publish_status(
-                PlannerStatus.FAILED,
-                str(exc),
-                planning_time_s=elapsed,
+            self.publish_status(PlannerStatus.FAILED, str(exc))
+            return
+        self.goal = goal, yaw
+        self._request_plan('new goal', received)
+
+    def _cancel_search(self):
+        if self.job is not None:
+            self.job.cancel.set()
+
+    def _hold_route(self, *, force=False):
+        if self.route is not None or force:
+            self.clear_path()
+        self.route = self.progress = self.progress_position = None
+
+    def _request_plan(self, reason, received=None):
+        if self.pending_plan is None or reason == 'new goal':
+            self.pending_plan = (reason, time.perf_counter() if received is None else received)
+
+    def _hold_for_replan(self, reason, received=None):
+        if reason == 'path blocked' and self.route is not None:
+            self.blocked_replan_pending = True
+        self._cancel_search()
+        self._hold_route()
+        self._request_plan(reason, received)
+        self.publish_status(PlannerStatus.PLANNING, f'replan: {reason}; holding.')
+
+    def _pose_error(self, now):
+        if self.position is None or self.pose_received_at is None:
+            return 'No valid odometry received.'
+        age = (now - self.pose_received_at).nanoseconds * 1e-9
+        if age < 0 or age > self.odom_timeout_s:
+            return 'Odometry is stale or the clock moved backward.'
+        return None
+
+    def _route_rejection(self, route, projection, start_yaw=None):
+        checker = self.snapshot.checker
+        if route.escape and projection.segment == 0 and projection.fraction < 1.0:
+            checker = self.settings.checker(
+                self.snapshot.raw_blocked, self.snapshot.geometry, escape=True,
             )
-            self.get_logger().warning(f'Planning failed: {exc}')
+        reason = pose_rejection(checker, self.position, self.start_yaw)
+        if reason is not None:
+            return reason
+        return remaining_rejection(
+            self.snapshot, self.settings, route, projection, self.goal[1], start_yaw,
+        )
+
+    def on_timer(self):
+        self._process_planning(schedule_search=True)
+
+    def _on_map_ready(self):
+        if self.pending_map is not None or self.pending_updates:
+            self._process_planning(schedule_search=True)
+
+    def _process_planning(self, *, schedule_search):
+        self._consume_goal()
+        changed = self._consume_map()
+        now = self.get_clock().now()
+        if self.goal is None:
+            if changed is not None and self.map_error is not None:
+                self.publish_status(PlannerStatus.FAILED, self.map_error)
+            self._complete_search()
             return
 
-        elapsed = time.perf_counter() - started
+        if changed is not None:
+            geometry_changed, received = changed
+            if self.route is not None and geometry_changed:
+                self._hold_for_replan('map geometry changed', received)
+            elif self.route is None and (self.job is None or self.job.cancel.is_set()):
+                trigger = 'map changed'
+                if self.job is not None and self.job.trigger not in ('new goal', 'periodic'):
+                    trigger = self.job.trigger
+                    received = min(received, self.job.requested_at)
+                self._request_plan(trigger, received)
+
+        error = (
+            (self.map_error or 'No valid map received.')
+            if self.snapshot is None else self._pose_error(now)
+        )
+        if error is not None:
+            self._cancel_search()
+            self._hold_route()
+            self._request_plan('inputs restored')
+            if self.input_error != error:
+                self.publish_status(PlannerStatus.FAILED, error)
+                self.input_error = error
+            self._complete_search()
+            return
+        self.input_error = None
+
+        if self.route is not None:
+            projection = self.progress
+            if self.position != self.progress_position:
+                projection = project_path(
+                    self.route.points, self.position, self.progress,
+                    max_advance_m=self.replan_deviation_m,
+                )
+            if changed is not None and self._route_rejection(self.route, projection) is not None:
+                self._hold_for_replan('path blocked', changed[1])
+            elif projection.deviation > self.replan_deviation_m:
+                self._hold_for_replan('path deviation')
+            else:
+                self.progress = projection
+                self.progress_position = self.position
+
+        self._complete_search()
+        if self.job is not None or not schedule_search:
+            return
+        now_s = now.nanoseconds * 1e-9
+        pending_reason = self.pending_plan[0] if self.pending_plan else None
+        trigger = should_replan(
+            now_s, self.last_attempt, pending_reason, self.min_replan_interval_s,
+            have_path=self.route is not None, period=self.replan_period_s,
+            urgent=self.blocked_replan_pending,
+        )
+        if trigger is not None:
+            self._start_search(trigger, now_s)
+
+    def _start_search(self, trigger, now_s):
+        requested_at = self.pending_plan[1] if self.pending_plan else time.perf_counter()
+        self.pending_plan = None
+        self.blocked_replan_pending = False
+        self.last_attempt = now_s
+        label = 'Processing new goal.' if trigger == 'new goal' else f'replan: {trigger}'
+        self.publish_status(PlannerStatus.PLANNING, label)
+        cancel = Event()
+        future = self.worker.submit(
+            _timed_search, self.snapshot, self.settings, self.position,
+            self.start_yaw, *self.goal, cancel, trigger != 'new goal',
+        )
+        self.job = SearchJob(
+            future, cancel, self.map_version, trigger, self.position, requested_at,
+        )
+        future.add_done_callback(self._notify_search_ready)
+
+    def _notify_search_ready(self, _future):
+        # The worker only wakes the executor. ROS state and publishers stay
+        # in the node's callback group.
+        if self.context.ok():
+            try:
+                self._search_ready.trigger()
+            except RuntimeError as exc:
+                if self.context.ok():
+                    self.get_logger().warning(f'Could not wake the search callback: {exc}')
+
+    def _on_search_ready(self):
+        if self.job is not None and self.job.future.done():
+            # Consume pending map and goal messages before accepting a result.
+            # Map and timer callbacks decide when to start searches.
+            self._process_planning(schedule_search=False)
+
+    def _complete_search(self):
+        job = self.job
+        if job is None or not job.future.done():
+            return
+        self.job = None
+        if job.cancel.is_set() or self.goal is None:
+            return
+
+        map_changed = job.map_version != self.map_version
+        retry_reason = job.trigger
+        if job.trigger == 'new goal':
+            retry_reason = 'map changed' if map_changed else 'start changed'
+        label = '' if job.trigger == 'new goal' else f'replan: {job.trigger}; '
+        try:
+            route, error, elapsed = job.future.result()
+        except Exception as exc:
+            route, error, elapsed = None, f'Search failed: {exc}', 0.0
+        if route is None:
+            if map_changed and job.trigger != 'periodic':
+                self._request_plan(retry_reason, job.requested_at)
+                error = 'Map changed during search: ' + error
+            self._report_search_failure(label + error, elapsed)
+            return
+
+        projection = project_path(route.points, route.points[0])
+        if math.dist(job.position, self.position) > self.snapshot.geometry.resolution:
+            rejection = 'Start pose changed during search.'
+        else:
+            rejection = self._route_rejection(route, projection, self.start_yaw)
+            if rejection is not None and map_changed:
+                rejection = 'Map changed during search: ' + rejection
+        if rejection is not None:
+            if job.trigger != 'periodic':
+                self._request_plan(retry_reason, job.requested_at)
+            self._report_search_failure(label + rejection, elapsed)
+            return
+
+        if job.trigger == 'periodic' and self.route is not None:
+            remaining = path_length(remaining_path(self.route.points, self.progress))
+            if path_length(route.points) >= self.improvement_ratio * remaining:
+                self.publish_status(
+                    PlannerStatus.SUCCEEDED, label + 'retained current path.',
+                    path_length_m=remaining, planning_time_s=elapsed,
+                )
+                return
+
+        path, length = self.make_path(
+            route.points, self.goal[1], self.snapshot.geometry.resolution,
+        )
+        self.route, self.progress = route, projection
+        self.progress_position = job.position
         self.path_pub.publish(path)
         self.publish_status(
-            PlannerStatus.SUCCEEDED,
-            'Path found.',
-            path_length_m=length,
-            planning_time_s=elapsed,
+            PlannerStatus.SUCCEEDED, label + 'Path found.',
+            path_length_m=length, planning_time_s=elapsed,
         )
+        response = time.perf_counter() - job.requested_at
         self.get_logger().info(
-            f'Path published: {length:.2f} m, '
-            f'{len(path.poses)} poses, {elapsed:.3f} s'
+            f'Path published: {length:.2f} m, {len(path.poses)} poses, '
+            f'search {elapsed:.3f} s, {job.trigger} response {response:.3f} s'
         )
+
+    def _report_search_failure(self, reason, elapsed):
+        if self.route is not None:
+            length = path_length(remaining_path(self.route.points, self.progress))
+            self.publish_status(
+                PlannerStatus.SUCCEEDED, reason + ' Retained current path.',
+                path_length_m=length, planning_time_s=elapsed,
+            )
+        else:
+            self.publish_status(PlannerStatus.FAILED, reason, planning_time_s=elapsed)
+            self.get_logger().warning(f'Planning failed: {reason}')
+
+    def destroy_node(self):
+        self._cancel_search()
+        self.worker.shutdown(wait=True, cancel_futures=True)
+        return super().destroy_node()
 
     def make_path(self, points, goal_yaw, spacing):
         """Sample each segment without changing its geometry."""

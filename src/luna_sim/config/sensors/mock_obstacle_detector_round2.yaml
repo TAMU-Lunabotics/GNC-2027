@@ -1,0 +1,5 @@
+# Reproduce the Round 2 driving trials. The arena seed is selected separately.
+mock_obstacle_detector:
+  ros__parameters:
+    refine_far_detections: true
+    seed: 47659

@@ -1,4 +1,5 @@
-"""Regulated Pure Pursuit control law, with no ROS dependencies.
+"""
+Regulated Pure Pursuit control law, with no ROS dependencies.
 
 The controller interface matches PurePursuit: set_path, stop, get_control.
 The occupancy helper is supplied by the ROS wrapper (or by tests).
@@ -7,7 +8,7 @@ import math
 from dataclasses import dataclass
 
 from luna_guidance.pure_pursuit import (
-    PurePursuit, Params as BaseParams, clamp, approach, wrap_angle,
+    PurePursuit, Params as BaseParams, clamp, wrap_angle,
     IDLE, FOLLOWING, GOAL_REACHED, STOPPED,
 )
 
@@ -25,6 +26,16 @@ class RegulatedParams(BaseParams):
     min_approach_speed: float = 0.05
     collision_check_time_s: float = 1.0
     occupied_threshold: int = 50
+
+
+def project_twist(x, y, yaw, v, w, duration):
+    """Integrate a constant unicycle command over the given duration."""
+    if abs(w) < 1e-10:
+        return x + v * math.cos(yaw) * duration, y + v * math.sin(yaw) * duration, yaw
+    end_yaw = yaw + w * duration
+    x += (v / w) * (math.sin(end_yaw) - math.sin(yaw))
+    y -= (v / w) * (math.cos(end_yaw) - math.cos(yaw))
+    return x, y, end_yaw
 
 
 class RegulatedPurePursuit(PurePursuit):
@@ -67,6 +78,10 @@ class RegulatedPurePursuit(PurePursuit):
                     return ax + u * dx, ay + u * dy
         return self.path[-1]
 
+    def _lookahead_distance(self):
+        return clamp(abs(self._v) * self.p.lookahead_time_s,
+                     self.p.min_lookahead_m, self.p.max_lookahead_m)
+
     def _predict_arc(self, x, y, yaw, v, w):
         """Check actual acceleration-limited command at <= 1 grid-cell increments."""
         self.collision_arc = [(x, y, yaw)]
@@ -86,14 +101,7 @@ class RegulatedPurePursuit(PurePursuit):
         dt = horizon / n
         xx, yy, theta = x, y, yaw
         for _ in range(n):
-            if abs(w) < 1e-10:
-                xx += v * math.cos(theta) * dt
-                yy += v * math.sin(theta) * dt
-            else:
-                new_theta = theta + w * dt
-                xx += (v / w) * (math.sin(new_theta) - math.sin(theta))
-                yy -= (v / w) * (math.cos(new_theta) - math.cos(theta))
-                theta = new_theta
+            xx, yy, theta = project_twist(xx, yy, theta, v, w, dt)
             self.collision_arc.append((xx, yy, wrap_angle(theta)))
             if self.obstacles.collides(xx, yy, radius):
                 return True
@@ -134,8 +142,7 @@ class RegulatedPurePursuit(PurePursuit):
             self._latched = True
             return self._zero(GOAL_REACHED, 'goal reached')
 
-        lookahead = clamp(abs(self._v) * p.lookahead_time_s,
-                          p.min_lookahead_m, p.max_lookahead_m)
+        lookahead = self._lookahead_distance()
         lx, ly = self._carrot_on_circle(x, y, seg, t, lookahead)
         self.lookahead_point = lx, ly
         dx, dy = lx - x, ly - y
@@ -156,6 +163,11 @@ class RegulatedPurePursuit(PurePursuit):
                 return self._zero(STOPPED, 'collision ahead')
             return v, w
 
+        remaining = max(self._dist_along_path[-1] - self._arc_position(seg, t), 0.0)
+        return self._follow_carrot(x, y, yaw, xr, yr, remaining, dt)
+
+    def _follow_carrot(self, x, y, yaw, xr, yr, remaining, dt, *, speed_cap=math.inf):
+        p = self.p
         reach_sq = max(xr * xr + yr * yr, p.min_lookahead_m ** 2)
         curvature = 2 * yr / reach_sq
         v_curv = p.cruise_speed
@@ -170,14 +182,13 @@ class RegulatedPurePursuit(PurePursuit):
         if p.proximity_clearance_m > 0 and clearance < p.proximity_clearance_m:
             v_prox *= max(clearance, 0.0) / p.proximity_clearance_m
         v = min(p.cruise_speed, max(min(v_curv, v_prox), p.min_regulated_speed))
-        remaining = max(self._dist_along_path[-1] - self._arc_position(seg, t), 0.0)
         if p.approach_dist_m > 0 and remaining < p.approach_dist_m:
             v = min(v, max(p.cruise_speed * remaining / p.approach_dist_m,
                            p.min_approach_speed))
         if abs(curvature) * v > p.max_angular_speed:
             v = p.max_angular_speed / abs(curvature)
         # Clamp speed before deriving omega so the commanded curvature is preserved.
-        v = min(v, p.max_linear_speed)
+        v = min(v, p.max_linear_speed, speed_cap)
         w = v * curvature
         v, w = self._limit(v, w, dt)
         if self._predict_arc(x, y, yaw, v, w):

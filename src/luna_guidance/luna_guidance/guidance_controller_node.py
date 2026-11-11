@@ -1,4 +1,5 @@
 """ROS wrapper around the path follower: /guidance/path + /odometry/filtered -> /cmd_vel."""
+from collections import deque
 import math
 from dataclasses import fields
 
@@ -13,6 +14,7 @@ from nav_msgs.msg import OccupancyGrid, Odometry, Path
 
 from luna_guidance import pure_pursuit as pp
 from luna_guidance import regulated_pure_pursuit as rpp
+from luna_guidance.hybrid_path_follower import HybridParams, HybridPathFollower
 from luna_guidance.obstacle_distance import ObstacleDistance
 
 STATE_TO_MSG = {
@@ -30,7 +32,8 @@ def yaw_from_quaternion(q):
 
 
 def is_valid_quaternion(q):
-    return (q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w) > 1e-6
+    norm_squared = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w
+    return math.isfinite(norm_squared) and norm_squared > 1e-6
 
 
 class GuidanceControllerNode(Node):
@@ -43,10 +46,20 @@ class GuidanceControllerNode(Node):
         self.base_frame = str(self.declare_parameter('base_frame', 'base_link').value)
 
         self.controller_type = str(self.declare_parameter('controller_type', 'pure_pursuit').value)
-        if self.controller_type not in ('pure_pursuit', 'regulated_pure_pursuit'):
+        self.footprint_mode = str(self.declare_parameter('footprint_mode', 'circle').value)
+        use_map_updates = bool(self.declare_parameter('use_map_updates', True).value)
+        if self.footprint_mode not in ('circle', 'hybrid'):
+            raise ValueError('footprint_mode must be circle or hybrid')
+        if self.footprint_mode == 'hybrid':
+            if self.controller_type != 'regulated_pure_pursuit':
+                raise ValueError('Hybrid paths require controller_type:=regulated_pure_pursuit')
+            controller_class, param_type = HybridPathFollower, HybridParams
+        elif self.controller_type == 'regulated_pure_pursuit':
+            controller_class, param_type = rpp.RegulatedPurePursuit, rpp.RegulatedParams
+        elif self.controller_type == 'pure_pursuit':
+            controller_class, param_type = pp.PurePursuit, pp.Params
+        else:
             raise ValueError('controller_type must be pure_pursuit or regulated_pure_pursuit')
-        param_type = (pp.Params if self.controller_type == 'pure_pursuit'
-                      else rpp.RegulatedParams)
         defaults = param_type()
         values = {}
         for f in fields(param_type):
@@ -56,12 +69,16 @@ class GuidanceControllerNode(Node):
         params = param_type(**values)
         self.obstacle_distance = ObstacleDistance(
             occupied_threshold=int(getattr(params, 'occupied_threshold', 50)))
-        # Choose once at startup; timer code works with either controller.
-        self.controller = (pp.PurePursuit(params) if self.controller_type == 'pure_pursuit'
-                           else rpp.RegulatedPurePursuit(params, self.obstacle_distance))
+        self.controller = (
+            controller_class(params, self.obstacle_distance)
+            if self.controller_type == 'regulated_pure_pursuit' else controller_class(params)
+        )
 
         self.pose = None
         self.pose_time = None
+        self.measured_twist = (0.0, 0.0)
+        self._base_map = None
+        self._early_updates = deque(maxlen=10)
         self.last_tick = None
         self.tick_count = 0
         self.last_status_key = None
@@ -75,8 +92,15 @@ class GuidanceControllerNode(Node):
         self.create_subscription(Path, '/guidance/path', self.on_path, latched)
         self.create_subscription(Odometry, '/odometry/filtered', self.on_odom, odom_qos)
         self.create_subscription(OccupancyGrid, '/map', self.on_map, latched)
-        self.create_subscription(OccupancyGridUpdate, '/map_updates',
-                                 self.on_map_update, odom_qos)
+        if use_map_updates:
+            updates_qos = odom_qos
+            if self.footprint_mode == 'hybrid':
+                updates_qos = QoSProfile(
+                    depth=10, reliability=ReliabilityPolicy.RELIABLE,
+                    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                )
+            self.create_subscription(OccupancyGridUpdate, '/map_updates',
+                                     self.on_map_update, updates_qos)
         self.cmd_pub = self.create_publisher(TwistStamped, '/cmd_vel', cmd_qos)
         self.status_pub = self.create_publisher(GuidanceStatus, '/guidance/status', latched)
         self.lookahead_pub = self.create_publisher(PointStamped, '/guidance/lookahead', debug_qos)
@@ -85,7 +109,7 @@ class GuidanceControllerNode(Node):
         self.create_timer(1.0 / self.rate_hz, self.on_timer)
         self.publish_status()
         self.get_logger().info(f'guidance controller up: {self.rate_hz:.0f} Hz, '
-                               f'mode {self.controller_type}, '
+                               f'mode {self.controller_type}, footprint {self.footprint_mode}, '
                                f'cruise {self.controller.p.cruise_speed} m/s')
 
     def on_path(self, msg):
@@ -93,13 +117,23 @@ class GuidanceControllerNode(Node):
             self.get_logger().error(f"path is in frame '{msg.header.frame_id}', expected "
                                     f"'{self.map_frame}': ignoring it and stopping")
             self.controller.set_path([])
+            self.publish_cmd(*self.controller.stop('invalid path frame'))
             return
 
         points = [(ps.pose.position.x, ps.pose.position.y) for ps in msg.poses]
         goal_yaw = None
         if len(msg.poses) >= 2 and is_valid_quaternion(msg.poses[-1].pose.orientation):
             goal_yaw = yaw_from_quaternion(msg.poses[-1].pose.orientation)
-        self.controller.set_path(points, goal_yaw)
+        try:
+            self.controller.set_path(points, goal_yaw)
+        except ValueError as exc:
+            self.get_logger().error(f'invalid path: {exc}')
+            self.controller.set_path([])
+            self.publish_cmd(*self.controller.stop('invalid path'))
+            return
+        if not points:
+            # A hold and its replacement can arrive between timer ticks.
+            self.publish_cmd(*self.controller.stop('path empty'))
         self.get_logger().info(f'new path: {len(points)} points'
                                if points else 'empty path: stopping')
 
@@ -108,11 +142,21 @@ class GuidanceControllerNode(Node):
             self.get_logger().error('map frame mismatch; ignoring map')
             return
         origin = msg.info.origin
+        geometry = (
+            msg.info.width, msg.info.height, msg.info.resolution,
+            origin.position.x, origin.position.y, yaw_from_quaternion(origin.orientation),
+        )
         try:
-            self.obstacle_distance.set_map(
-                msg.info.width, msg.info.height, msg.info.resolution,
-                origin.position.x, origin.position.y,
-                yaw_from_quaternion(origin.orientation), msg.data)
+            if self.footprint_mode == 'hybrid':
+                base_map = (*geometry, tuple(msg.data))
+                if base_map == self._base_map and self.obstacle_distance.ready:
+                    return
+                self.obstacle_distance.set_map(*base_map)
+                self._base_map = base_map
+                while self._early_updates:
+                    self.on_map_update(self._early_updates.popleft())
+            else:
+                self.obstacle_distance.set_map(*geometry, msg.data)
         except ValueError as exc:
             self.obstacle_distance.ready = False
             self.get_logger().error(f'invalid occupancy grid: {exc}')
@@ -120,6 +164,9 @@ class GuidanceControllerNode(Node):
     def on_map_update(self, msg):
         if msg.header.frame_id not in ('', self.map_frame):
             self.get_logger().error('map update frame mismatch; ignoring update')
+            return
+        if self.footprint_mode == 'hybrid' and self._base_map is None:
+            self._early_updates.append(msg)
             return
         try:
             self.obstacle_distance.apply_update(msg.x, msg.y, msg.width,
@@ -149,6 +196,12 @@ class GuidanceControllerNode(Node):
                 throttle_duration_sec=5.0)
             return
         p = msg.pose.pose
+        if self.footprint_mode == 'hybrid':
+            if not is_valid_quaternion(p.orientation):
+                self.pose_time = None
+                return
+            twist = msg.twist.twist
+            self.measured_twist = (math.hypot(twist.linear.x, twist.linear.y), twist.angular.z)
         self.pose = (p.position.x, p.position.y, yaw_from_quaternion(p.orientation))
         self.pose_time = self.get_clock().now()
 
@@ -171,7 +224,10 @@ class GuidanceControllerNode(Node):
             v, w = controller.stop(reason)
         else:
             x, y, yaw = self.pose if self.pose is not None else (0.0, 0.0, 0.0)
-            v, w = controller.get_control(x, y, yaw, dt)
+            if self.footprint_mode == 'hybrid':
+                v, w = controller.get_control(x, y, yaw, dt, measured_twist=self.measured_twist)
+            else:
+                v, w = controller.get_control(x, y, yaw, dt)
 
         self.publish_cmd(v, w, now)
         self.publish_collision_arc(now)

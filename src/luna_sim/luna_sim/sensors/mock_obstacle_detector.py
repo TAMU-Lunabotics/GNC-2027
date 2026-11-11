@@ -8,7 +8,10 @@ error, rasterized as filled circles into a map_msgs/OccupancyGridUpdate on /map_
 Stands in for lidar -> obstacle_detector so the planner can be developed now. Gazebo and the
 real lidar publish the same topic later; the planner must not notice the swap.
 
-Accumulate-only: a cell marked occupied is never set back to free.
+By default, detections accumulate without clearing occupied cells. With the optional
+far-detection refinement enabled, a closer estimate can replace a distant estimate;
+the node rebuilds from the base map and all retained estimates, so obsolete detection
+cells can become free. This is simulated sensor behavior, not rover perception.
 """
 import math
 import os
@@ -161,6 +164,7 @@ class MockObstacleDetector(Node):
         self.fov_deg = float(self.declare_parameter("fov_deg", 90.0).value)
         self.pos_std = float(self.declare_parameter("position_noise_std_m", 0.03).value)
         self.rad_std = float(self.declare_parameter("radius_noise_std_m", 0.02).value)
+        self.refine_far_detections = self.declare_parameter("refine_far_detections", False).value
         self.occupied = int(self.declare_parameter("occupied_value", 100).value)
         seed = int(self.declare_parameter("seed", 0).value)
 
@@ -174,11 +178,15 @@ class MockObstacleDetector(Node):
                           for o in load_layout(layout_path)["obstacles"]]
 
         self.rng = random.Random(seed)
+        # Follow-up observations use a separate stream from first detections.
+        self.refine_rng = random.Random(f"{seed}:refine")
+        self.refine_ranges = {}
+        self.base_grid = None
         self.pose = None            # true robot pose, from kinematic_base at 50 Hz
         self.grid = None            # persistent accumulated grid, seeded from /map
         self.meta = None            # (resolution, width, height, origin_x, origin_y)
         self.last_warn_t = None
-        self.estimates = {} # list of obstacles that have been detected
+        self.estimates = {}  # list of obstacles that have been detected
 
         map_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -197,12 +205,16 @@ class MockObstacleDetector(Node):
             f"range [{self.min_range_m:.2f}, {self.max_range_m:.2f}] m to edge, "
             f"fov {self.fov_deg:.0f} deg, seed {seed}, "
             f"{sensor_link} mount offset ({self.mount_x:.2f}, {self.mount_y:.2f})")
+        if self.refine_far_detections:
+            self.get_logger().info("Far detection refinement enabled")
 
     def _on_map(self, msg) -> None:
         """Seed the accumulated grid from the wall map, preserving cells we already marked."""
         info = msg.info
         meta = (info.resolution, info.width, info.height,
                 info.origin.position.x, info.origin.position.y)
+        if self.refine_far_detections:
+            self.base_grid = list(msg.data)
 
         if self.meta is None or meta != self.meta:
             self.grid = list(msg.data)
@@ -256,19 +268,49 @@ class MockObstacleDetector(Node):
         x, y, yaw = self.pose
         sx, sy = sensor_origin(x, y, yaw, self.mount_x, self.mount_y)
 
-        new_cells = []
+        new_estimates = []
+        revised = False
         for idx, (ox, oy, radius) in enumerate(self.obstacles):
-            if idx in self.estimates:
-                continue  # already detected; its estimate is fixed
+            first_range = self.refine_ranges.get(idx)
+            if idx in self.estimates and first_range is None:
+                continue
             if not is_visible(sx, sy, yaw, ox, oy, radius,
                               self.min_range_m, self.max_range_m, self.fov_deg):
                 continue
 
             center_dist = math.hypot(ox - sx, oy - sy)
-            estimate = apply_noise(self.rng, ox, oy, radius, center_dist,
-                                   self.max_range_m, self.pos_std, self.rad_std)
-            self.estimates[idx] = estimate
-            new_cells.extend(self._mark(estimate))
+            if first_range is None:
+                estimate = apply_noise(self.rng, ox, oy, radius, center_dist,
+                                       self.max_range_m, self.pos_std, self.rad_std)
+                self.estimates[idx] = estimate
+                new_estimates.append(estimate)
+                if self.refine_far_detections and center_dist >= 0.75 * self.max_range_m:
+                    self.refine_ranges[idx] = center_dist
+            elif center_dist <= 0.65 * first_range:
+                fresh = apply_noise(self.refine_rng, ox, oy, radius, center_dist,
+                                    self.max_range_m, self.pos_std, self.rad_std)
+                old_weight = noise_scale(first_range, self.max_range_m) ** -2
+                fresh_weight = noise_scale(center_dist, self.max_range_m) ** -2
+                self.estimates[idx] = tuple(
+                    (old_weight * a + fresh_weight * b) / (old_weight + fresh_weight)
+                    for a, b in zip(self.estimates[idx], fresh)
+                )
+                del self.refine_ranges[idx]
+                revised = True
+
+        new_cells = []
+        if revised:
+            # Repaint all estimates over the base map so old cells can clear
+            # without erasing base occupancy or another obstacle's cells.
+            previous = self.grid
+            self.grid = self.base_grid.copy()
+            for estimate in self.estimates.values():
+                self._mark(estimate)
+            new_cells = [(i % width, i // width) for i, (a, b) in
+                         enumerate(zip(previous, self.grid)) if a != b]
+        else:
+            for estimate in new_estimates:
+                new_cells.extend(self._mark(estimate))
 
         bbox = cells_bbox(new_cells)
         if bbox is None:

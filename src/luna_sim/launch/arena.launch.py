@@ -1,4 +1,5 @@
-"""Generate an arena, then serve its maps.
+"""
+Generate an arena, then serve its maps.
 
   ros2 launch luna_sim arena.launch.py                      # random seed (printed)
   ros2 launch luna_sim arena.launch.py seed:=42 rviz:=true
@@ -24,7 +25,8 @@ from luna_sim.arena.paths import arena_paths, default_out_dir, resolve_config, r
 
 
 def _setup(context):
-    arg = lambda name: LaunchConfiguration(name).perform(context)
+    def arg(name):
+        return LaunchConfiguration(name).perform(context)
 
     seed = resolve_seed(arg('seed'))
     config = resolve_config(arg('config'))
@@ -34,7 +36,7 @@ def _setup(context):
     publish_truth = arg('publish_truth').lower() == 'true'
 
     if arg('generate').lower() == 'true':
-       generate_map(config, seed, out_dir, resolution)
+        generate_map(config, seed, out_dir, resolution)
     paths = arena_paths(out_dir, seed)
 
     actions = [
@@ -79,7 +81,9 @@ def _setup(context):
 
 def generate_launch_description():
     # in generate_launch_description():
-    DeclareLaunchArgument('generate', default_value='true', description='false = serve existing files only'),
+    DeclareLaunchArgument(
+        'generate', default_value='true', description='false = serve existing files only',
+    ),
 
     return LaunchDescription([
         DeclareLaunchArgument('seed', default_value='random',

@@ -1,4 +1,5 @@
-"""Pure pursuit path following. No ROS imports.
+"""
+Pure pursuit path following.
 
     controller = PurePursuit(Params())
     controller.set_path([(0, 0), (1, 0), (2, 0.5)], goal_yaw=0.0)
@@ -134,7 +135,7 @@ class PurePursuit:
         alpha = math.atan2(yr, xr)
         self.state, self.reason = FOLLOWING, ''
 
-        # leave rotate mode at a smaller angle than we entered it, so noise can't flip it back and forth
+        # Leave rotate mode at a smaller angle to prevent noise from toggling it.
         if self._rotating:
             if abs(alpha) < p.rotate_in_place_angle_rad * p.rotate_exit_ratio:
                 self._rotating = False
@@ -151,7 +152,9 @@ class PurePursuit:
 
         v = p.cruise_speed
         decel = p.goal_decel_ratio * p.max_linear_accel
-        v_goal = p.min_speed + math.sqrt(2.0 * decel * max(self.dist_to_goal - p.goal_tolerance_m, 0.0))
+        v_goal = p.min_speed + math.sqrt(
+            2.0 * decel * max(self.dist_to_goal - p.goal_tolerance_m, 0.0)
+        )
         v = min(v, v_goal)
         if abs(curvature) * v > p.max_angular_speed:
             v = p.max_angular_speed / abs(curvature)
@@ -184,7 +187,9 @@ class PurePursuit:
             bx, by = self.path[i + 1]
             abx, aby = bx - ax, by - ay
             length_sq = abx * abx + aby * aby
-            t = 0.0 if length_sq == 0.0 else clamp(((x - ax) * abx + (y - ay) * aby) / length_sq, 0.0, 1.0)
+            t = 0.0 if length_sq == 0.0 else clamp(
+                ((x - ax) * abx + (y - ay) * aby) / length_sq, 0.0, 1.0
+            )
             d = math.hypot(x - (ax + t * abx), y - (ay + t * aby))
             if best is None or d < best[0]:
                 best = (d, i, t)
@@ -193,7 +198,9 @@ class PurePursuit:
     def _arc_position(self, seg, t):
         if len(self.path) == 1:
             return 0.0
-        return self._dist_along_path[seg] + t * (self._dist_along_path[seg + 1] - self._dist_along_path[seg])
+        return self._dist_along_path[seg] + t * (
+            self._dist_along_path[seg + 1] - self._dist_along_path[seg]
+        )
 
     def _point_at(self, s):
         if len(self.path) == 1 or s >= self._dist_along_path[-1]:

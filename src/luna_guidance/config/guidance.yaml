@@ -1,7 +1,7 @@
 guidance_controller:
   ros__parameters:
     rate_hz: 20.0
-    controller_type: pure_pursuit  # override to regulated_pure_pursuit
+    controller_type: regulated_pure_pursuit
 
     lookahead_m: 0.5
     cruise_speed: 0.3
