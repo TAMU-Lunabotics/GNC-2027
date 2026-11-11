@@ -22,11 +22,19 @@ class SimClock(Node):
         rate_hz = float(self.declare_parameter("publish_rate_hz", 200.0).value)
         self.sim_t = float(self.declare_parameter("start_time_s", 0.0).value)
 
-        qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE, history=HistoryPolicy.KEEP_LAST)
+        qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+        )
         self.pub = self.create_publisher(Clock, "/clock", qos)
         self.last_wall = time.monotonic()
         self.create_timer(1.0 / rate_hz, self._tick)
-        self.get_logger().info(f"publishing /clock at {rate_hz:.0f} Hz wall, {self.rtf:.1f}x real time, (sim step ~{self.rtf / rate_hz * 1000:.1f} ms)")
+        self.get_logger().info(
+            f"publishing /clock at {rate_hz:.0f} Hz wall, {self.rtf:.1f}x real time, "
+            f"(sim step ~{self.rtf / rate_hz * 1000:.1f} ms)"
+        )
 
     def _tick(self) -> None:
         now = time.monotonic()

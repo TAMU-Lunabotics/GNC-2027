@@ -76,7 +76,8 @@ def line_of_sight(grid, start: Cell, end: Cell) -> bool:
     return True
 
 
-def theta_star(grid, start: Cell, goal: Cell, segment_is_free=None) -> list[Cell]:
+def theta_star(grid, start: Cell, goal: Cell, segment_is_free=None,
+               should_cancel=None) -> list[Cell]:
     """
     Return cell-center waypoints, or [] if the search finds no route.
 
@@ -111,6 +112,8 @@ def theta_star(grid, start: Cell, goal: Cell, segment_is_free=None) -> list[Cell
     closed = set()
 
     while frontier:
+        if should_cancel is not None and should_cancel():
+            return []
         _, queued_cost, current = heapq.heappop(frontier)
 
         if current in closed or queued_cost > costs[current]:
@@ -125,6 +128,9 @@ def theta_star(grid, start: Cell, goal: Cell, segment_is_free=None) -> list[Cell
 
         closed.add(current)
         x, y = current
+        current_cost = costs[current]
+        ancestor = parents[current]
+        ancestor_cost = costs[ancestor]
 
         for offset_y in (-1, 0, 1):
             for offset_x in (-1, 0, 1):
@@ -135,24 +141,22 @@ def theta_star(grid, start: Cell, goal: Cell, segment_is_free=None) -> list[Cell
 
                 if neighbor in closed or not is_free(grid, neighbor):
                     continue
+                new_cost = current_cost + distance(current, neighbor)
+                shortcut_cost = ancestor_cost + distance(ancestor, neighbor)
+                previous_cost = costs.get(neighbor, math.inf)
+                try_shortcut = shortcut_cost <= new_cost and shortcut_cost < previous_cost
+                # Test geometry only when at least one candidate can improve the cost.
+                if new_cost >= previous_cost and not try_shortcut:
+                    continue
                 if not segment_is_free(current, neighbor):
                     continue
 
-                # First consider reaching the neighbor through current.
                 best_parent = current
-                new_cost = costs[current] + distance(current, neighbor)
+                if try_shortcut and segment_is_free(ancestor, neighbor):
+                    best_parent = ancestor
+                    new_cost = shortcut_cost
 
-                # Theta*: try connecting directly through current's parent.
-                ancestor = parents[current]
-                if segment_is_free(ancestor, neighbor):
-                    shortcut_cost = (
-                        costs[ancestor] + distance(ancestor, neighbor)
-                    )
-                    if shortcut_cost <= new_cost:
-                        best_parent = ancestor
-                        new_cost = shortcut_cost
-
-                if new_cost < costs.get(neighbor, math.inf):
+                if new_cost < previous_cost:
                     costs[neighbor] = new_cost
                     parents[neighbor] = best_parent
                     priority = new_cost + distance(neighbor, goal)

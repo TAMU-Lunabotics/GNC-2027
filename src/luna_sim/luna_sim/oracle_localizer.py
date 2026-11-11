@@ -1,8 +1,9 @@
 """
 Publishes the ground-truth robot pose as the robot's actual odometry.
 
-Publishes exactly where and in the same form as the real localization publishes, so everything downstream (pathing, mission, RViz) works before state-estimation exists, or 
-whenever something needs to be tested without state-estiation error getting in the way
+Publish on the same topics and in the same form as real localization.
+Downstream planning, mission code, and RViz can run before state estimation is
+available or during tests that require ground-truth poses.
 
 Never run it alongside the state-estimator, both would publish map -> odom -> base_link.
 """
@@ -41,7 +42,7 @@ class OracleLocalizer(Node):
         self.get_logger().warn('ORACLE localization: publishing ground truth as the estimate')
 
     def publish_map_to_odom(self):
-        """map -> odom is identity: with perfect localization, odometry never drifts."""
+        """Publish the identity transform from map to odom for perfect localization."""
         t = TransformStamped()
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = self.map_frame

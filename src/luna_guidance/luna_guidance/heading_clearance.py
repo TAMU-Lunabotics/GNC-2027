@@ -70,7 +70,7 @@ class HeadingClearance:
         ) <= 0:
             return False
 
-        for _, (xmin, ymin, xmax, ymax) in self.circle.obstacles:
+        for (xmin, ymin, xmax, ymax), _ in self.circle.occupied_spans:
             obstacle_x = (xmin + xmax) / 2
             obstacle_y = (ymin + ymax) / 2
             half_x = (xmax - xmin) / 2
@@ -94,14 +94,18 @@ class HeadingClearance:
 
         return True
 
-    def pose_is_free(self, position, world_yaw):
+    def pose_is_free(self, position, world_yaw, *, motion_padding_m=0.0):
+        """Check a pose padded to cover motion between prediction samples."""
         if not math.isfinite(world_yaw):
             raise ValueError("Yaw must be finite.")
+        if not math.isfinite(motion_padding_m) or motion_padding_m < 0.0:
+            raise ValueError("Motion padding must be finite and nonnegative.")
+        padding = self.padding + motion_padding_m
         return self._rectangle_free(
             self.circle.to_local(position),
             world_yaw - self.geometry.origin_yaw,
-            self.half_length + self.padding,
-            self.half_width + self.padding,
+            self.half_length + padding,
+            self.half_width + padding,
         )
 
     def straight_is_free(self, start, end):
@@ -135,12 +139,12 @@ class CircleFirstHeadingClearance(HeadingClearance):
     Stationary turns still require the enclosing circle.
     """
 
-    def pose_is_free(self, position, world_yaw):
+    def pose_is_free(self, position, world_yaw, *, motion_padding_m=0.0):
         if not math.isfinite(world_yaw):
             raise ValueError("Yaw must be finite.")
-        if self.circle.point_reason(position) is None:
+        if motion_padding_m == 0.0 and self.circle.point_reason(position) is None:
             return True
-        return super().pose_is_free(position, world_yaw)
+        return super().pose_is_free(position, world_yaw, motion_padding_m=motion_padding_m)
 
     def straight_is_free(self, start, end):
         # Validate endpoints before trying either footprint check.

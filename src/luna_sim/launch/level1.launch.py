@@ -1,10 +1,13 @@
-"""Level 1 sim
+"""
+Run the Level 1 simulator.
 
-  ros2 launch luna_sim level1.launch.py                     # random seed (logged)
-  ros2 launch luna_sim level1.launch.py seed:=42
-  ros2 launch luna_sim level1.launch.py seed:=42 rtf:=5.0 rviz:=false #runs at x5 speed
-  ros2 launch luna_sim level1.launch.py oracle_localization:=false   # bring your own localization, we can flip the default later when localization exists
-  ros2 launch luna_sim level1.launch.py obstacle_sensor:=false   # walls only
+ros2 launch luna_sim level1.launch.py  # random seed (logged)
+ros2 launch luna_sim level1.launch.py seed:=42
+ros2 launch luna_sim level1.launch.py seed:=42 rtf:=5.0 rviz:=false  # five times real time
+ros2 launch luna_sim level1.launch.py oracle_localization:=false  # use your own localization
+ros2 launch luna_sim level1.launch.py obstacle_sensor:=false  # walls only
+
+The localization default can change once real localization is available.
 """
 import os
 
@@ -20,8 +23,11 @@ from luna_sim.arena.paths import arena_paths, default_out_dir, resolve_config, r
 
 
 def _setup(context):
-    arg = lambda name: LaunchConfiguration(name).perform(context)
-    is_true = lambda name: arg(name).lower() == 'true'
+    def arg(name):
+        return LaunchConfiguration(name).perform(context)
+
+    def is_true(name):
+        return arg(name).lower() == 'true'
 
     sim_share = get_package_share_directory('luna_sim')
     desc_share = get_package_share_directory('luna_description')
@@ -67,24 +73,24 @@ def _setup(context):
     ]
     # 6. Mock wheel encoders and odometry
     if is_true('mock_wheel_odometry'):
-            actions.append(Node(
-                package='luna_sim',
-                executable='mock_wheel_odometry',
-                name='mock_wheel_odometry',
-                output='screen',
-                parameters=[
-                    os.path.join(
-                        sim_share, 'config', 'sensors',
-                        'mock_wheel_odometry.yaml'
+        actions.append(Node(
+            package='luna_sim',
+            executable='mock_wheel_odometry',
+            name='mock_wheel_odometry',
+            output='screen',
+            parameters=[
+                os.path.join(
+                    sim_share, 'config', 'sensors',
+                    'mock_wheel_odometry.yaml'
+                ),
+                sim_time,
+                {
+                    'geometry_yaml': os.path.join(
+                        desc_share, 'config', 'robot_geometry.yaml'
                     ),
-                    sim_time,
-                    {
-                        'geometry_yaml': os.path.join(
-                            desc_share, 'config', 'robot_geometry.yaml'
-                        ),
-                        'seed': seed,
-                    },
-                ],
+                    'seed': seed,
+                },
+            ],
         ))
 
     # Simulated AprilTag cameras
@@ -160,14 +166,18 @@ def _setup(context):
 
     # 8. Mock perception: ground truth -> /map_updates, stands in for lidar -> obstacle_detector.
     if is_true('obstacle_sensor'):
+        sensors = os.path.join(sim_share, 'config', 'sensors')
+        parameters = [
+            sim_time,
+            os.path.join(sensors, 'mock_obstacle_detector.yaml'),
+            {'arena_json': str(paths['json']), 'seed': seed},
+        ]
+        if arg('obstacle_detector_profile') == 'round2':
+            parameters.append(os.path.join(sensors, 'mock_obstacle_detector_round2.yaml'))
         actions.append(Node(
             package='luna_sim', executable='mock_obstacle_detector',
             name='mock_obstacle_detector', output='screen',
-            parameters=[
-                sim_time,
-                os.path.join(sim_share, 'config', 'sensors', 'mock_obstacle_detector.yaml'),
-                {'arena_json': str(paths['json']), 'seed': seed},
-            ]))
+            parameters=parameters))
     else:
         actions.append(LogInfo(msg='[level1] obstacle_sensor:=false -> nothing publishes '
                                    '/map_updates; the planner sees walls only'))
@@ -189,6 +199,10 @@ def generate_launch_description():
         DeclareLaunchArgument('oracle_localization', default_value='true'),
         DeclareLaunchArgument('obstacle_sensor', default_value='true',
                               description='mock lidar obstacle detection -> /map_updates'),
+        DeclareLaunchArgument(
+            'obstacle_detector_profile', default_value='default', choices=['default', 'round2'],
+            description='Select the mock obstacle detector profile',
+        ),
         DeclareLaunchArgument(
             'mock_wheel_odometry',
             default_value='true',

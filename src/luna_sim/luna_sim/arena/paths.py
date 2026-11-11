@@ -1,5 +1,8 @@
-"""Where arena files live and what they're called. One place, so every launch file
-and node computes the same paths from (out_dir, seed)."""
+"""
+Resolve the locations and names of arena files.
+
+Launch files and nodes compute the same paths from (out_dir, seed).
+"""
 import os
 import random
 import re
@@ -9,7 +12,7 @@ PACKAGE = 'luna_sim'
 
 
 def arena_paths(out_dir, seed):
-    """All files the generator writes for one seed."""
+    """Return the paths the generator writes for one seed."""
     out = Path(out_dir).expanduser().resolve()
     return {
         'json': out / f'artemis_arena_{seed}.json',
@@ -26,7 +29,12 @@ def resolve_seed(seed_arg):
 
 
 def default_out_dir():
-    """<src>/luna_sim/generated if the source tree can be found, else $ROS_HOME/luna_sim/arenas."""
+    """
+    Find the default arena output directory.
+
+    Use <src>/luna_sim/generated when the source package can be found.
+    Otherwise, use $ROS_HOME/luna_sim/arenas.
+    """
     try:
         return find_source_package() / 'generated'
     except Exception:
@@ -51,7 +59,7 @@ def find_source_package(pkg=PACKAGE):
 
 
 def resolve_config(arg, pkg=PACKAGE):
-    """A real path, or a name in share/<pkg>/config/arena/ ('arena' or 'arena.yaml')."""
+    """Resolve a path or a name in share/<pkg>/config/arena/, with optional .yaml."""
     p = Path(arg).expanduser()
     if p.is_file():
         return p.resolve()
@@ -60,4 +68,6 @@ def resolve_config(arg, pkg=PACKAGE):
     for name in (arg, f'{arg}.yaml'):
         if (cfg_dir / name).is_file():
             return (cfg_dir / name).resolve()
-    raise FileNotFoundError(f"arena config '{arg}' not found (tried it as a path and in {cfg_dir})")
+    raise FileNotFoundError(
+        f"arena config '{arg}' not found (tried it as a path and in {cfg_dir})"
+    )

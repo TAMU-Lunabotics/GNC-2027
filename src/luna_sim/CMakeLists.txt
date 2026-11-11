@@ -43,7 +43,12 @@ install(DIRECTORY launch config rviz worlds
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  foreach(test_name test_imu_model test_mock_imu_node)
+  foreach(test_name
+    test_imu_model
+    test_mock_imu_node
+    test_timed_action
+    test_wheel_model
+  )
     ament_add_pytest_test(${test_name} test/${test_name}.py
       APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
       TIMEOUT 60

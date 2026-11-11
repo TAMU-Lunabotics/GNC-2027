@@ -15,3 +15,10 @@ path_planner:
     max_expansions: 20000
     merge_turnable: true
     allow_straight_departure: true
+
+    rate_hz: 10.0
+    min_replan_interval_s: 0.5
+    replan_deviation_m: 0.5
+    replan_period_s: 0.0
+    improvement_ratio: 0.9
+    start_escape_radius_m: 0.3

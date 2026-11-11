@@ -1,4 +1,4 @@
-"""Run from src/luna_guidance:  pytest test/"""
+"""Test pure pursuit path following and motion limits."""
 import math
 import random
 

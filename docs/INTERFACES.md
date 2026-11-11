@@ -117,6 +117,93 @@ Historical /path and /plan references in the task specification and
 PlannerStatus comments are not the implemented output topic:
 the implemented topic is /guidance/path. No message-schema change is made.
 
+## Stage 2 path replanning — WORKING — 2026–27
+
+The Stage 1 section above records the snapshot baseline. Stage 2 keeps
+the same rover topics and message types. The planner retains the goal
+and validates the remaining route when the map geometry or occupied cells
+change. A geometry change or blocked route clears `/guidance/path` so the
+controller holds. Identical maps and changes behind a clear remaining
+route preserve the current path. The planner also holds for unavailable
+inputs or excessive deviation from the route. Progress may advance at most
+`replan_deviation_m` along the route for a distinct pose position. Repeated
+positions keep the same projection, so another leg cannot become the
+current leg merely because a timer or map callback runs again.
+
+The 10 Hz planner timer schedules searches from fresh `/odometry/filtered`.
+Incoming map messages also wake the executor to check the route and start
+an eligible replan promptly. The first search after an active route becomes
+blocked bypasses the minimum interval. That priority persists while a
+cancelled search finishes and is consumed when the replacement search starts.
+Retries and optional improvement searches respect the minimum interval.
+Searches run in one worker, which wakes the ROS executor when a result is
+ready. The executor checks pending map and goal updates before publishing.
+A new goal, a map geometry change, or an invalid input cancels the old
+search. Same-geometry occupancy changes let the worker finish on its
+snapshot. The executor checks the route against the latest map and pose
+before publication. If the candidate fails that check or the old snapshot
+found no route before the map changed, a required replan is queued under
+the usual retry interval. New goals bypass the 0.5 s minimum between
+attempts. Optional periodic improvement is off by default.
+Failed replans leave an empty path and retain the goal so a subsequent
+map change or restored input can trigger another attempt.
+
+The planner uses the Stage 1 swept footprint and turn checks. When a replan
+starts inside the extra clearance margin, it can try one checked escape
+segment to a grid center within 0.3 m. The escape must clear the physical
+footprint, including the hybrid heading allowance. The remaining route uses
+the full margin. If the physical footprint overlaps an obstacle, the planner
+holds and reports failure. Set `start_escape_radius_m` to `0.0` to disable
+escape. `unknown_is_blocked` retains its Stage 1 default. Set it to `false`
+for optimistic planning through unknown cells.
+
+This optimistic planner setting does not change the existing RPP
+`ObstacleDistance` checker, which always treats unknown cells as blocked.
+Do not describe it as an integrated exploration mode. A real mapper must
+mark observed free space and its planner/controller policy must agree.
+The Level 1 initial map marks its cells free, so the current driving tests
+do not verify exploration through unknown-valued cells.
+
+The urgent first-blocked-route exception and retained unknown-cell default
+differ from the original Stage 2 task. They remain WORKING choices for
+review. The urgency exception avoids a possible 0.5 s cooldown wait before
+a search intended to meet a 0.20 s response target; subsequent retries
+remain rate limited. Existing `/guidance/path` output and the `-1` or
+`0..100` occupancy convention remain unchanged.
+
+For Level 1 simulation, start `luna_sim level1.launch.py` with
+`obstacle_sensor:=true` and start `luna_guidance guidance.launch.py` with
+`use_sim_time:=true use_map_updates:=true` before sending a goal. With this
+option, the planner merges `map_msgs/OccupancyGridUpdate` patches from
+`/map_updates` into the base `/map`. Use a fresh sim session so the planner
+receives all discoveries. The default rover launch consumes complete
+`/map` messages.
+
+The supplied planner configuration selects `hybrid` with regulated pure
+pursuit. The guidance launch passes the planner's footprint dimensions,
+heading allowance, and occupancy threshold to the controller. It keeps the
+same `nav_msgs/msg/Path` contract. The controller follows one leg at a time,
+checks its projected rectangular sweep, and uses the enclosing circle for
+stationary turns after translation stops. The controller uses physical
+footprint clearance with heading allowance. The planner applies its extra
+planning margin and may waive that margin on an approved start escape.
+
+Set `footprint_mode:=circle` on the guidance launch to reproduce the
+measured Round 2 driving trials. Selecting `controller_type:=pure_pursuit`
+also selects circle mode unless a footprint override is supplied. An
+explicit hybrid footprint requires regulated pure pursuit.
+
+Select `obstacle_detector_profile:=round2` for the regression setup with
+far-detection refinement and detector seed 47659. The arena `seed` argument
+continues to choose the layout independently. Normal Level 1 launches use
+the default detector profile.
+
+`PlannerStatus.planning_time_s` reports worker search and clearance time.
+The success log also reports wall time from the triggering update or goal
+callback to path publication, including timer and rate-limit waits. The
+0.20 s response target requires measurement on the ROS graph and target
+hardware.
+
 ## Mock IMU contract — WORKING — 2026–27
 
 This simulation sensor supplies raw readings for localization development.

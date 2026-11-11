@@ -2,7 +2,9 @@ from luna_sim.actuators.timed_action import (CANCELED, SUCCEEDED, TIMEOUT, Timed
                                              make_rng)
 
 
-def make(duration=20.0, jitter=3.0, probability=0.0, reason='stall', seed=0, name='mock_excavation'):
+def make(
+    duration=20.0, jitter=3.0, probability=0.0, reason='stall', seed=0, name='mock_excavation',
+):
     return TimedAction(duration, jitter, probability, reason, make_rng(seed, name))
 
 
@@ -95,10 +97,14 @@ def test_different_seed_different_sequence():
 def test_each_node_gets_its_own_stream():
     dig = make(seed=3, name='mock_excavation')
     dump = make(seed=3, name='mock_dump')
-    assert [dig.start().duration_s for _ in range(5)] != [dump.start().duration_s for _ in range(5)]
+    assert [dig.start().duration_s for _ in range(5)] != [
+        dump.start().duration_s for _ in range(5)
+    ]
 
 
 def test_failure_probability_does_not_shift_later_durations():
     plain = make(seed=5, probability=0.0)
     flaky = make(seed=5, probability=1.0)
-    assert [plain.start().duration_s for _ in range(10)] == [flaky.start().duration_s for _ in range(10)]
+    assert [plain.start().duration_s for _ in range(10)] == [
+        flaky.start().duration_s for _ in range(10)
+    ]

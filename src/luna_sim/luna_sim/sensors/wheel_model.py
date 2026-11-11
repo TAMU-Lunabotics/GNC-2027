@@ -9,11 +9,9 @@ import random
 from dataclasses import dataclass
 
 
-
 def wrap_angle(angle: float) -> float:
     """Wrap an angle to [-pi, pi]."""
     return math.atan2(math.sin(angle), math.cos(angle))
-
 
 
 @dataclass
@@ -27,6 +25,7 @@ class WheelOdometry:
     angular_velocity: float
     left_ticks: int
     right_ticks: int
+
 
 class WheelOdometryModel:
     def __init__(
@@ -45,7 +44,7 @@ class WheelOdometryModel:
             raise ValueError("ticks_per_rev must be positive.")
         if noise_std < 0 or noise_per_rad_s < 0:
             raise ValueError("Noise parameters cannot be negative.")
-        
+
         self.radius = wheel_radius
         self.separation = wheel_separation
         self.ticks_per_rev = ticks_per_rev
@@ -72,18 +71,20 @@ class WheelOdometryModel:
         self.pose_covariance = [[0.0]*3 for _ in range(3)]
         self.twist_covariance = [[0.0]*2 for _ in range(2)]
 
-    
-
-    def update_covariance(self, dt: float, left_sigma: float, right_sigma: float, distance: float, delta_yaw: float, mid_yaw: float):
+    def update_covariance(
+        self, dt: float, left_sigma: float, right_sigma: float, distance: float,
+        delta_yaw: float, mid_yaw: float,
+    ):
         """Propagate uncertainty through differential-drive odometry."""
         r = self.radius
         b = self.separation
 
-        ### TWIST COVARIANCE
+        # Twist covariance
 
         # Variance of each wheel's measured angle increment.
         # Includes Gaussian wheel-speed noise and encoder quantization.
-        q_var = self.tick_angle**2 / 6.0 # a common approximation of the variance for a quantized angle reading is q^2 / 12
+        # The variance of one quantized angle reading is commonly approximated by q^2 / 12.
+        q_var = self.tick_angle**2 / 6.0
 
         var_l = (left_sigma * dt)**2 + q_var
         var_r = (right_sigma * dt)**2 + q_var
@@ -104,9 +105,7 @@ class WheelOdometryModel:
             ]
         ]
 
-
-
-        ### POSE COVARIANCE
+        # Pose covariance
 
         # Jacobian w.r.t. previous pose
         F = [
@@ -152,22 +151,25 @@ class WheelOdometryModel:
 
         self.pose_covariance = new_P
 
-
-
     def step(self, true_v: float, true_w: float, dt: float) -> WheelOdometry:
-        """Advance the simulated wheel encoders and odometry.
-
-        Args:
-            true_v: True forward body velocity (m/s).
-            true_w: True yaw rate (rad/s).
-            dt: Elapsed simulation time (s).
         """
+        Advance the simulated wheel encoders and odometry.
 
+        Parameters
+        ----------
+        true_v : float
+            True forward body velocity (m/s).
+        true_w : float
+            True yaw rate (rad/s).
+        dt : float
+            Elapsed simulation time (s).
+
+        """
         if not math.isfinite(dt) or dt <= 0.0:
             raise ValueError("dt must be finite and positive")
         if not math.isfinite(true_v) or not math.isfinite(true_w):
             raise ValueError("True velocities must be finite")
-        
+
         # Convert true body motion to ideal wheel velocities
         left_speed = (true_v - true_w * self.separation / 2.0) / self.radius
         right_speed = (true_v + true_w * self.separation / 2.0) / self.radius
